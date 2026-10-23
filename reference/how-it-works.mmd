@@ -1,0 +1,110 @@
+flowchart LR
+  subgraph S1["① Get the replay · Replay Recorder app (127.0.0.1:47811)"]
+    direction TB
+    a1(["Paste an aoe4world match link<br/><span class='m'>or drop .rec files on Record replays.bat</span>"])
+    a2["Read the game id and player id from the link"]
+    a3{"Already<br/>downloaded?"}
+    a4["Download it from the official<br/>Age of Empires server<br/><span class='m'>server busy → wait, retry up to 3×<br/>not shared by the player → error</span>"]
+    a5["Unzip → <b>.rec</b> in replays/"]
+    a6{"Same game<br/>version?"}
+    a7["Flag it: other game version<br/><span class='m'>not recorded</span>"]
+    a8["Queue: one replay at a time<br/><span class='m'>waits while Steam is signed out, the game<br/>is already open or Watch in game runs</span>"]
+    a1 --> a2 --> a3
+    a3 -- no --> a4 --> a5 --> a6
+    a3 -- yes --> a6
+    a6 -- no --> a7
+    a6 -- yes --> a8
+  end
+
+  subgraph S2["② Record it inside the real game · record_replay.py + recorder.lua"]
+    direction TB
+    b2["Launch AoE4 through Steam in replay mode<br/><span class='m'>.rec copied to the game's playback folder;<br/>steam -applaunch … -dev -replay</span>"]
+    b3["Wait for the match to start<br/><span class='m'>by reading the game's log file</span>"]
+    b4["Open the dev console in the background<br/><span class='m'>keys are posted to the game window, so it never<br/>takes over your screen (if that fails: click the game once)</span>"]
+    b5["Type in the recorder script<br/><span class='m'>each line catches script errors; the game answers<br/>ACK or NAK (a fatal engine error can still stop it)</span>"]
+    b6{"READY?"}
+    b7["Fast-forward<br/><span class='m'>1 game tick per frame ≈ 9–20× real speed</span>"]
+    b8["<b>recorder.lua samples the game</b><br/>every 0.5 s: every unit and building: position, HP,<br/>owner, what it attacks<br/>every 1 s: what each player can see, move orders,<br/>animals and relics moving<br/>every 2 s: resources and population<br/>every 10 s: trees, gold, stone, berries left<br/>once: the height map · on events: kills, upgrades,<br/>buildings finished"]
+    b9{"At the<br/>end?"}
+    b10["Save the recorder's lines → <b>.rlog</b><br/>close the game"]
+    b11["Failed → retried on the next run<br/><span class='m'>3 failures in a row → recording pauses</span>"]
+    b2 --> b3 --> b4 --> b5 --> b6
+    b6 -- no --> b11
+    b6 -- yes --> b7 --> b8 --> b9
+    b9 -- not yet --> b8
+    b9 -- yes --> b10
+    b9 -- "no progress for 90 s" --> b11
+  end
+
+  subgraph S3["③ Turn it into map data · convert.py"]
+    direction TB
+    c1["Read the .rec: player names, civs,<br/>teams, chat, date, game version"]
+    c2["Read the .rlog: each unit's path,<br/>HP, owner and vision over time"]
+    c3["Name and sort units by blueprint<br/><span class='m'>value = its resource cost</span>"]
+    c4["Who killed whom<br/><span class='m'>the killer the game reports;<br/>if none, last unit seen attacking it within 3 s</span>"]
+    c5["Army value and unit counts<br/><span class='m'>every 5 s, per player</span>"]
+    c6["Find the fights<br/><span class='m'>group damage and deaths that are close in time<br/>(≤ 15 s apart) and space (7% of the map);<br/>drop tiny ones; count losses, who moved in</span>"]
+    c7["Age-ups and eco upgrades;<br/>trees, mines and animals over time"]
+    c8["Write <b>viewer/data/&lt;name&gt;.js</b><br/><span class='m'>+ index.js, the list of games<br/>+ trends numbers, with results from aoe4world</span>"]
+    c1 --> c2 --> c3 --> c4 --> c5 --> c6 --> c7 --> c8
+  end
+
+  subgraph S4["④ Play it back · viewer (any browser, nothing to install)"]
+    direction TB
+    d1(["Open viewer/index.html<br/>and pick a game"])
+    d2["Load that game's data file<br/><span class='m'>prepare walls and gates, sight ranges,<br/>water level (highest fish + 0.2)</span>"]
+    d3{"Changed since<br/>last frame?"}
+    d9["Skip drawing"]
+    d4["Move the clock<br/><span class='m'>time += frame time × speed (0.25× to 32×)</span>"]
+    d5["Work out that moment: who is alive, where<br/>(smoothed between samples), owner, tier,<br/>what each side can see (fog of war)"]
+    d6["Draw the map, bottom to top<br/><span class='m'>ground and water → forests and resources → fog<br/>→ buildings → orders and trails → unit figures<br/>→ attacks → deaths → highlights</span>"]
+    d7["Update the panels<br/><span class='m'>fights, players, selection, army comp,<br/>map key, timeline chart</span>"]
+    d8(["You: zoom, pan, turn, click, drag a box,<br/>keys, timeline, vision"])
+    d1 --> d2 --> d3
+    d3 -- no --> d9 --> d3
+    d3 -- yes --> d4 --> d5 --> d6 --> d7 --> d3
+    d8 -.-> d3
+  end
+
+  subgraph S5["⑤ Watch in game · jump from the viewer into AoE4"]
+    direction TB
+    e1(["Press Watch in game<br/><span class='m'>at the time and spot you are looking at</span>"])
+    e2{"Opened through<br/>Replay Recorder?"}
+    e3["Reopen it there<br/><span class='m'>or ask you to start the app</span>"]
+    e4["Find the .rec and check the game version<br/><span class='m'>refused while a recording runs</span>"]
+    e5{"Same replay<br/>already open?"}
+    e6["Later moment: fast-forward in place<br/><span class='m'>about 1 s to start; an earlier<br/>moment asks to restart</span>"]
+    e7["Launch the game, open the console<br/><span class='m'>as in ②, about 30 s; asks<br/>before closing an open game</span>"]
+    e8["In the game: top speed to the moment,<br/>then normal speed, camera on your spot"]
+    e9["Viewer shows the progress until ready"]
+    e1 --> e2
+    e2 -- no --> e3
+    e2 -- yes --> e4 --> e5
+    e5 -- yes --> e6 --> e8
+    e5 -- no --> e7 --> e8 --> e9
+  end
+
+  REC[("<b>.rec</b><br/><span class='m'>player commands only</span>")]
+  RLOG[("<b>.rlog</b><br/><span class='m'>raw samples</span>")]
+  JS[("<b>&lt;name&gt;.js</b><br/><span class='m'>viewer data</span>")]
+  S1 --> REC --> S2 --> RLOG --> S3 --> JS --> S4 --> S5
+
+  classDef s1 fill:#12213a,stroke:#3b82f6,color:#e6edf3
+  classDef s2 fill:#2a1416,stroke:#ef4444,color:#e6edf3
+  classDef s3 fill:#10261a,stroke:#22c55e,color:#e6edf3
+  classDef s4 fill:#221532,stroke:#a855f7,color:#e6edf3
+  classDef s5 fill:#2b1b0d,stroke:#f97316,color:#e6edf3
+  classDef dec fill:#2a2410,stroke:#eab308,color:#fde68a
+  classDef file fill:#1d242e,stroke:#cbd5e1,color:#e6edf3
+  class a1,a2,a4,a5,a7,a8 s1
+  class b2,b3,b4,b5,b7,b8,b10,b11 s2
+  class c1,c2,c3,c4,c5,c6,c7,c8 s3
+  class d1,d2,d4,d5,d6,d7,d8,d9 s4
+  class e1,e3,e4,e6,e7,e8,e9 s5
+  class a3,a6,b6,b9,d3,e2,e5 dec
+  class REC,RLOG,JS file
+  style S1 fill:#0d1626,stroke:#3b82f6,stroke-width:2px,color:#93c5fd
+  style S2 fill:#1a0e10,stroke:#ef4444,stroke-width:2px,color:#fca5a5
+  style S3 fill:#0b1a12,stroke:#22c55e,stroke-width:2px,color:#86efac
+  style S4 fill:#160e21,stroke:#a855f7,stroke-width:2px,color:#d8b4fe
+  style S5 fill:#1c1209,stroke:#f97316,stroke-width:2px,color:#fdba74

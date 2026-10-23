@@ -1,0 +1,57 @@
+# Committed: the code, the README, docs/screenshots, the bundled Python the .bat files run (python/: embeddable
+# CPython 3.12 with psutil) and one showcase match: its replay, aoe4world summary, recording, viewer data and the
+# Replay Recorder's list. Everything else stays on this PC: other matches, the 3D models extracted from the game
+# (viewer3d/assets, built locally by viewer3d/tools/build-assets.mjs), the extraction toolchain, logs and settings.
+/*
+!/.gitignore
+!/.ignore
+!/AGENTS.md
+!/README.md
+!/Replay Recorder.bat
+!/Record replays.bat
+!/recorder/
+!/tools/
+!/viewer/
+!/viewer3d/
+!/docs/
+!/reference/
+!/python/
+!/replays/
+!/recordings/
+!/recorder_app.json
+
+/reference/*
+!/reference/what-changed/
+!/reference/how-it-works.png
+!/reference/how-it-works.mmd
+
+# The showcase match (aoe4_245598603) only
+/replays/*
+!/replays/aoe4world/
+/replays/aoe4world/*
+!/replays/aoe4world/aoe4_245598603.rec
+!/replays/aoe4world/aoe4_245598603.summary.json
+/recordings/*
+!/recordings/aoe4_245598603.rlog
+/viewer/data/*
+!/viewer/data/index.js
+!/viewer/data/aoe4_245598603.js
+!/viewer/data/trends/
+/viewer/data/trends/*
+!/viewer/data/trends/games.js
+/viewer/notes/
+
+# 3D viewer: game art built from the local install by viewer3d/tools/build-assets.mjs and havok/bake-anims.mjs, and
+# the asset tools' npm packages
+/viewer3d/assets/
+/viewer3d/tools/node_modules/
+# the inspector's model tweaks (viewer3d/serve.mjs /tweaks.json), tuned on this PC
+/viewer3d/tweaks.json
+/viewer3d/tweaks.json.tmp
+
+# Anywhere: Python caches, logs, scratch worktrees, temp files
+__pycache__/
+*.pyc
+*.log
+.wt_*
+*.tmp

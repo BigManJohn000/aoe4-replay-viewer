@@ -1,0 +1,18 @@
+# Hides bulk data from agent search (grep/glob). Git is unaffected; reading a file by its exact path still works.
+# Tracked but bulky: the showcase recording, the bundled Python and three.js (its tracked Basis transcoder stays
+# visible: vendor/** hides the files only, so the folders and that one file can be listed again).
+viewer/data/
+recordings/
+replays/
+python/
+viewer3d/vendor/**
+!viewer3d/vendor/**/
+!viewer3d/vendor/three/examples/jsm/libs/basis/basis_transcoder.wasm
+# Already git-ignored; repeated here so a non-git copy of the project stays hidden too.
+viewer3d/assets/
+viewer3d/tools/node_modules/
+toolchain/
+*.rlog
+*.glb
+*.map
+*.log
