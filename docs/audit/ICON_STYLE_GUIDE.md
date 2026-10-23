@@ -75,14 +75,15 @@ then share one outline weight with the existing figures.
 | Stone / limestone | `#cbc4b4` | T2–T4 masonry |
 | Brick | `#9c6b52` | Islamic, Byzantine and Rus masonry |
 | Slate | `#7d838c` | T3–T4 roofs |
-| Gold | `#f3d27a` | **Tier ornament: T3–T4 only** — never a base colour. Exception: gold that is part of a unit's identity kit (named in its shared Gear/Palette line, e.g. Gilded Archer trim, Atabeg fittings) stays identical at all four tiers. 66 families use that exception. Two prompts add tier-specific gilding below T3 and must be revised before the full run: `prelate` T2 ("gilded book clasps") and `golden-tent` T1 ("gilded pole tips"). |
+| Gold | `#f3d27a` | **Tier ornament: T3–T4 only** — never a base colour. Exception: gold that is part of a unit's identity kit (named in its shared Gear/Palette line, e.g. Gilded Archer trim, Atabeg fittings) stays identical at all four tiers. 66 families use that exception. The two prompts that added gilding below T3 are revised: `prelate` T2 now has brass book clasps, and `golden-tent` T1 no longer adds pole-tip gilding (its subject line keeps the identity gilding at every tier). |
 | Player accent | recolourable | one saturated area: sash, shield field, banner, roof stripe, awnings |
 
 Every prompt should name exactly one recolourable accent region so the engine can tint it per owner (the 3D engine
 already tints unit materials per player; the 2D map draws unit art in the player colour). Do not bake a specific civ's
-colour into the accent. **Current prompts break this rule:** 105 of the 115 families whose Palette line names an accent
-give it a fixed hue (e.g. `akinji` "indigo sash", `archer` "green armband"). Before the full run, change those to a
-neutral, tintable value (e.g. "mid-grey shield field as recolourable player accent").
+colour into the accent. The 105 families whose Palette line gave the accent a fixed hue (e.g. `akinji` "indigo sash as
+player accent", `archer` "green armband as accent") now name it the way the other families do: "player-colour sash",
+"player-colour armband". Two tier lines that re-dyed that region were neutralised too (`arbaletrier` T2 "dyed tabard",
+`janissary` T1 "plain coat"). The 9 `gilded-*` families keep their gold accent: it is the identity kit above.
 
 ## 5. Output spec
 
