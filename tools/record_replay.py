@@ -466,7 +466,11 @@ def record(src: Path, rec: recfile.Replay, speed: float, keep_open: bool) -> tup
         raise RecordError("Steam is not installed (no SteamExe in the registry)")
     name = stage_replay(src)
     identity = None
-    lowered = not keep_open and lower_graphics()  # --keep-open leaves the game up to watch: keep the player's look
+    if keep_open:  # the game stays up to watch: the player's own look, also after a lowered run that died
+        restore_graphics()
+        lowered = False
+    else:
+        lowered = lower_graphics()
     started = time.time()
     try:
         subprocess.Popen([str(STEAM_EXE), "-applaunch", APP_ID, "-dev", "-replay", f"playback:{name}"])

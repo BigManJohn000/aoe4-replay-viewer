@@ -132,6 +132,27 @@ class RecordReplayTests(unittest.TestCase):
                 self.assertFalse(self.recorder.lower_graphics())
             self.assertFalse(config.exists() or backup.exists())
 
+    def test_keep_open_after_a_crashed_run_launches_with_the_players_settings(self):
+        launched = []
+
+        def launch(_command):
+            launched.append(config.read_bytes())
+            raise RuntimeError('stop after launch')
+
+        replay = SimpleNamespace(duration_seconds=60.0, version=1, players=[])
+        with tempfile.TemporaryDirectory() as temp:
+            config, backup = Path(temp) / 'configuration_system.lua', Path(temp) / 'backup'
+            config.write_bytes(self.CONFIG)
+            with patch.multiple(self.recorder, GAME_CONFIG=config, CONFIG_BACKUP=backup, STEAM_EXE=Path('steam.exe'),
+                                stage_replay=Mock(return_value='replay.rec')), \
+                    patch.object(self.recorder.ai, 'game_pid', Mock(return_value=None), create=True), \
+                    patch.object(self.recorder.subprocess, 'Popen', side_effect=launch):
+                self.recorder.lower_graphics()  # the lowered run dies here: no restore
+                with self.assertRaisesRegex(RuntimeError, 'stop after launch'):
+                    self.recorder.record(Path('replay.rec'), replay, 125.0, keep_open=True)
+            self.assertEqual(launched, [self.CONFIG])
+            self.assertFalse(backup.exists())
+
 
 if __name__ == '__main__':
     unittest.main()
