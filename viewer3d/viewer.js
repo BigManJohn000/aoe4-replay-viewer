@@ -4179,6 +4179,7 @@ function iconSrc(e, px) {
 
 function seek(t) {
   state.t = clamp(t, R.t0, R.t1);
+  director.cut(); // Follow action picks the hottest fight at the new time instead of holding the old one
   reanchor();
   raidToasts.clear();
   raidToasts.last = state.t;

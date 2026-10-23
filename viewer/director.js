@@ -2,14 +2,14 @@
 // director.js: "Follow the action", the observer camera both viewers share. No DOM; runs after model.js (RV.idxAt,
 // RV.alive, RV.FIGHT_LEAD) on the shared model M (RV.prepare: M.fights from convert.py's detect_fights, M.kills, M.byId).
 //
-// RV.director(M) → { shot(t) } where shot(t) = { x, z, r, fight, label } | null is where a caster would look at replay
-// time t: x, z the view centre and r the radius (world units) to keep in view; the viewers ease their camera toward it.
+// RV.director(M) → { shot(t), cut() } where shot(t) = { x, z, r, fight, label } | null is where a caster would look at
+// replay time t: x, z the view centre and r the radius (world units) to keep in view; the viewers ease their camera
+// toward it. The viewers call cut() on every seek: the next shot picks afresh, as after a cut in a broadcast.
 //   1. A fight is on from RV.FIGHT_LEAD s before its first blow (the camera arrives as the armies meet, like the fight
 //      list's lead-in) until LINGER s after its last. Its heat now = 1 + the value of its kills in [t − HEAT_BACK,
 //      t + HEAT_AHEAD] (a unit counts at least MIN_KILL, so cheap kills still register).
 //   2. The shot stays on the current fight while it is on. It cuts to another fight only after DWELL s on this one
-//      and when the other is SWITCH times hotter; after a seek (t jumped back, or more than SEEK s ahead) the hottest
-//      fight on is picked at once.
+//      and when the other is SWITCH times hotter; the first shot after cut() picks the hottest fight on at once.
 //   3. The view centre is the middle of the fight's units still alive within REACH × radius of the fight's centre, so
 //      the camera moves with a chase; r is their spread, between MIN_R and the fight's radius. No unit in reach: the
 //      fight's centre and radius.
@@ -17,7 +17,7 @@
 //      kills within SKIRMISH_R of it. Nothing at all: the last shot (the camera stays put), null before the first.
 (function (RV) {
   const LINGER = 4, HEAT_BACK = 8, HEAT_AHEAD = 3, MIN_KILL = 10;
-  const DWELL = 6, SWITCH = 1.5, SEEK = 30;
+  const DWELL = 6, SWITCH = 1.5;
   const REACH = 1.5, MIN_R = 20;
   const SKIRMISH = 10, SKIRMISH_R = 40;
 
@@ -89,11 +89,10 @@
       return { x: sx / n, z: sz / n, r: MIN_R + 5, fight: null, label: "Skirmish" };
     }
 
-    let cur = -1, since = 0, lastT = NaN, held = null;
+    let cur = -1, since = 0, fresh = true, held = null;
     function shot(t) {
-      const seeked = !(t >= lastT - 1e-6 && t - lastT <= SEEK);
-      lastT = t;
-      if (seeked || (cur >= 0 && !on(fights[cur], t))) cur = -1;
+      if (fresh || (cur >= 0 && !on(fights[cur], t))) cur = -1;
+      fresh = false;
       let best = cur, bestHeat = cur >= 0 ? heat(cur, t) : 0;
       if (cur < 0 || t - since >= DWELL) {
         const need = cur >= 0 ? bestHeat * SWITCH : 0;
@@ -109,6 +108,6 @@
       return held;
     }
 
-    return { shot };
+    return { shot, cut() { fresh = true; } };
   };
 })(window.RV);

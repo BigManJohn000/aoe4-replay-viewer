@@ -53,10 +53,11 @@ test('it holds a fight for DWELL s before cutting away, however hot the other ge
   assert.equal(director.shot(33).label, 'Fight 2');
 });
 
-test('after a seek it picks the hottest fight at once', () => {
+test('after cut() (a seek, even +5 s) it picks the hottest fight at once', () => {
   const director = RV.director(M);
-  assert.equal(director.shot(15).label, 'Fight 1');
-  assert.equal(director.shot(32).label, 'Fight 2'); // 17 s ahead in one step is a jump, not playback
+  assert.equal(director.shot(27).label, 'Fight 1');
+  director.cut(); // the viewer seeks 27 → 32: within DWELL, which would otherwise hold Fight 1
+  assert.equal(director.shot(32).label, 'Fight 2');
 });
 
 test("the view centres on the fight's units in reach and frames their spread", () => {

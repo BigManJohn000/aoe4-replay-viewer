@@ -109,6 +109,7 @@
   // ---------- state actions ----------
   S.seek = t => {
     S.t = Math.max(0, Math.min(M.duration, t));
+    director.cut();
     reanchor();
     S.dirty = true;
   };
@@ -394,7 +395,7 @@
 
   function togglePlay() {
     if (S.playing) S.t = clockTime(performance.now());
-    if (S.t >= M.duration) S.t = M.d.recordStart;
+    if (S.t >= M.duration) S.seek(M.d.recordStart);
     S.playing = !S.playing;
     reanchor();
   }
