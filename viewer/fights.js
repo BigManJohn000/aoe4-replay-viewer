@@ -82,16 +82,18 @@
 //
 // ── Idle army and late reinforcements ──
 // Army units (infantry/cavalry/ranged/siege) of a side that were inside the area, alive, moved < IDLE_MOVE (4 m) over the
-// trailing IDLE_WIN (15 s) and did not attack in it, checked every IDLE_STEP (2.5 s) from t0 to t1; idle seconds = checks
-// × step, reported from IDLE_MIN (5 s). Late: first time inside the area after t0 + LATE_AFTER (20 s) and before t1.
+// trailing IDLE_WIN (15 s) and did not attack in it, checked every IDLE_STEP (2.5 s) from t0 to t1; idle seconds are
+// each eligible step's overlap with the fight and the unit's alive spans, reported from IDLE_MIN (5 s).
+// Late: first time inside the area after t0 + LATE_AFTER (20 s) and before t1.
 //
 // ── Eco ──
 // Per side: value of units lost in the area by class (military = anything not villager/building), villagers lost, eco
 // buildings (bp econ|farm|mill|camp|market|trade|dock) vs other buildings lost; villagers pulled = villagers with
 // attack samples in the window (and the damage they dealt); forced idle = villager-seconds below the t0 gatherer count
-// (d.jobs food+wood+gold+stone, player-wide, from t0 to t1 + FLEE s) after removing villagers that died and the count's own
-// wobble (std dev over the 60 s before t0, gatherersNoise), counted only when a villager of that side was hit or killed in
-// the area during the fight. d.jobs is not per area, so this also catches villagers pulled away elsewhere.
+// (d.jobs food+wood+gold+stone, player-wide, from t0 to min(capturedEnd ?? duration, t1 + FLEE s)) after removing
+// villagers from their death time and the count's own wobble (std dev over the 60 s before t0, gatherersNoise).
+// Held job values are integrated between samples, deaths and window boundaries, only when a villager of that side
+// was hit or killed in the area during the fight. d.jobs is not per area, so this also catches villagers pulled elsewhere.
 // Tug/eco/overlap: deaths are counted in the window inside the area, so two fights that overlap in time and place share some.
 (function () {
   const R = {};
@@ -779,7 +781,7 @@
     function idleScan() {
       const res = perTeam(() => ({ idle: [], late: [], idleValue: 0, lateValue: 0, idleShare: 0, lateShare: 0, armyValue: 0 }));
       const steps = [];
-      for (let s = t0; s <= t1 + 1e-9; s += IDLE_STEP) steps.push(s);
+      for (let s = t0; s < t1; s += IDLE_STEP) steps.push(s);
       const near = area + 30, mid = (t0 + t1) / 2;
       for (const e of I.army) {
         const life0 = e.spans[0], life1 = e.spans[e.spans.length - 1];
@@ -802,7 +804,10 @@
           if (Math.hypot(q.x - x, q.z - z) >= IDLE_MOVE) continue;
           const j = lowerBound(times, back + 1e-9);
           if (j < times.length && times[j] <= s) continue; // attacked in the trailing window
-          idleSecs += IDLE_STEP; if (since === null) since = s;
+          for (let j = 0; j < e.spans.length; j += 2) {
+            idleSecs += Math.max(0, Math.min(s + IDLE_STEP, t1, e.spans[j + 1]) - Math.max(s, e.spans[j]));
+          }
+          if (since === null) since = s;
         }
         if (!any) continue;
         const tm = sideOf(e, firstIn);
@@ -1046,14 +1051,21 @@
         const mean = pre.length ? pre.reduce((a, b) => a + b, 0) / pre.length : base;
         const noise = pre.length > 1 ? Math.sqrt(pre.reduce((a, b) => a + (b - mean) * (b - mean), 0) / pre.length) : 0;
         r.gatherersNoise = noise;
+        const stop = Math.min(d.capturedEnd ?? d.duration, t1 + FLEE);
+        if (stop <= t0) continue;
         const deaths = [];
-        for (const e of I.deaths) if (e.cat === "villager" && e.died >= t0 && e.died <= t1 + FLEE && sideOf(e, e.died - 0.01) === s.team) deaths.push(e.died);
-        let idle = 0;
-        for (let i = 0; i < ts.length; i++) {
-          if (ts[i] < t0 || ts[i] > t1 + FLEE) continue;
-          const nxt = i + 1 < ts.length ? Math.min(ts[i + 1], t1 + FLEE) : ts[i];
-          const dead = deaths.filter((x) => x <= ts[i]).length;
-          idle += Math.max(0, base - dead - val[i] - noise) * Math.max(0, nxt - ts[i]);
+        for (const e of I.deaths) if (e.cat === "villager" && e.died >= t0 && e.died <= stop && sideOf(e, e.died - 0.01) === s.team) deaths.push(e.died);
+        const cuts = [t0, stop];
+        for (const t of ts) if (t > t0 && t < stop) cuts.push(t);
+        for (const t of deaths) if (t > t0 && t < stop) cuts.push(t);
+        cuts.sort((a, b) => a - b);
+        let idle = 0, dead = 0, sample = Fr.idxAt(ts, t0);
+        for (let i = 0; i + 1 < cuts.length; i++) {
+          const a = cuts[i], b = cuts[i + 1];
+          if (b <= a) continue;
+          while (sample + 1 < ts.length && ts[sample + 1] <= a) sample++;
+          while (dead < deaths.length && deaths[dead] <= a) dead++;
+          idle += Math.max(0, base - dead - val[Math.max(0, sample)] - noise) * (b - a);
         }
         r.forcedIdle = idle;
       }
