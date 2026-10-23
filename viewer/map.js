@@ -235,7 +235,21 @@
 
     focus(x, z, radius) {
       this.camX = x; this.camZ = z;
-      this.scale = Math.min(this.w, this.h) / (2 * Math.max(20, radius) * 1.6);
+      this.scale = this.scaleFor(radius);
+    }
+
+    // The zoom that keeps a disc of `radius` around the view centre on screen, with a margin.
+    scaleFor(radius) { return Math.min(this.w, this.h) / (2 * Math.max(20, radius) * 1.6); }
+
+    // Follow the action (director.js): ease toward shot s's centre and the zoom focus() picks for its radius, at a
+    // wall-clock rate so the camera pans the same at every playback speed. true while it is still moving.
+    chase(s, dt) {
+      if (!s) return false;
+      const dx = s.x - this.camX, dz = s.z - this.camZ, ds = Math.log(this.scaleFor(s.r) / this.scale);
+      if (Math.hypot(dx, dz) * this.scale < 0.5 && Math.abs(ds) < 0.002) return false;
+      const k = 1 - Math.exp(-dt * 2.5);
+      this.camX += dx * k; this.camZ += dz * k; this.scale *= Math.exp(ds * k);
+      return true;
     }
 
     // World (x, z) -> screen: the offset from the camera turned, z up.
@@ -271,7 +285,7 @@
         this.scale = Math.min(60, Math.max(0.3, this.scale * Math.exp(-ev.deltaY * 0.0015)));
         this.camX = wx; this.camZ = wz;
         this.pan(mx - this.w / 2, my - this.h / 2); // the point under the pointer stays there
-        this.S.follow = false;
+        this.S.follow = false; this.S.followAction = false;
         this.S.dirty = true;
       }, { passive: false });
       this.c.addEventListener("contextmenu", ev => ev.preventDefault()); // right-drag moves the map
@@ -292,7 +306,7 @@
           } else if (drag.moved) {
             this.camX = drag.cx; this.camZ = drag.cz;
             this.pan(dx, dy);
-            this.S.follow = false;
+            this.S.follow = false; this.S.followAction = false;
             this.S.dirty = true;
           }
         }

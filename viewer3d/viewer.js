@@ -1034,6 +1034,7 @@ const state = {
     toasts: true, debugCard: false }, // under-attack notices (hud.js); raw facts on the unit card
   selected: null, hovered: null, follow: false, quality: 'high', // quality: 'high' | 'low' (applyQuality); selected: the lone selected entity (section 8)
   camPlayer: 0, // player index whose recorded camera drives the view (0: free camera)
+  followAction: false, // Follow action (G): the camera goes where the fighting is (shared director.js)
 };
 let anchorWall = performance.now(), anchorT = state.t;
 const reanchor = (now = performance.now()) => { anchorWall = now; anchorT = state.t; invalidate(); };
@@ -4027,6 +4028,17 @@ const _fwd = new THREE.Vector3(), _side = new THREE.Vector3(), _move = new THREE
 const _camQ = new THREE.Quaternion(), _camF = new THREE.Vector3(), _camU = new THREE.Vector3(), _camR = new THREE.Vector3();
 const _camM = new THREE.Matrix4();
 const MOVE_KEYS = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE'];
+const director = RV.director(M2); // Follow action: where a caster would look at each moment (shared director.js)
+
+/** Follow action on or off (button, G). It owns the camera: a player's recorded camera and a unit follow end. */
+function setFollowAction(on) {
+  state.followAction = on;
+  if (on) {
+    setCamPlayer(0);
+    if (state.follow) { state.follow = false; renderInspector(true); }
+  }
+  syncPov();
+}
 
 /** Drive the view from player idx's recorded camera (R.cameraAt), or hand it back to the free camera (0). */
 function setCamPlayer(idx) {
@@ -4034,7 +4046,7 @@ function setCamPlayer(idx) {
   state.camPlayer = idx;
   $('camView').value = String(idx);
   controls.enabled = !idx;
-  if (idx) state.follow = false;
+  if (idx) { state.follow = false; state.followAction = false; }
   else { camera.fov = FREE_FOV; camera.updateProjectionMatrix(); }
 }
 
@@ -4069,7 +4081,7 @@ function updateCamera(dt) {
   if (keys.has('KeyA')) _move.sub(_side);
   const dist = camera.position.distanceTo(controls.target);
   if (_move.lengthSq() > 0) {
-    state.follow = false;
+    state.follow = false; state.followAction = false;
     _move.normalize().multiplyScalar(dist * 0.9 * dt * (keys.has('ShiftLeft') || keys.has('ShiftRight') ? 2.5 : 1));
     controls.target.add(_move);
     camera.position.add(_move);
@@ -4078,6 +4090,20 @@ function updateCamera(dt) {
   if (rot) {
     _off.subVectors(camera.position, controls.target).applyAxisAngle(camera.up, rot * dt * 1.4);
     camera.position.copy(controls.target).add(_off);
+  }
+  if (state.followAction && state.follow && state.selected) state.followAction = false; // a unit follow (F, double-click) takes over
+  if (state.followAction) {
+    const s = director.shot(state.t);
+    if (s) {
+      const k = 1 - Math.exp(-dt * 2.5); // wall-clock rate: the same pan at every playback speed
+      _v.set(s.x, terrain.heightAt(s.x, s.z), -s.z).sub(controls.target);
+      _off.subVectors(camera.position, controls.target);
+      const zoom = Math.log(clamp(s.r * 6, 70, 500) / _off.length()); // focusFight's framing of a fight's radius
+      if (_v.lengthSq() > 0.0025 || Math.abs(zoom) > 1e-3) {
+        controls.target.addScaledVector(_v, k);
+        camera.position.copy(controls.target).addScaledVector(_off, Math.exp(zoom * k));
+      }
+    }
   }
   const e = state.selected;
   if (state.follow && e) {
@@ -4783,6 +4809,7 @@ $('inspector').addEventListener('click', (ev) => {
 $('slower').addEventListener('click', () => stepSpeed(-1));
 $('faster').addEventListener('click', () => stepSpeed(1));
 $('play').addEventListener('click', () => setPlaying(!state.playing));
+$('followAction').addEventListener('click', () => setFollowAction(!state.followAction));
 setSpeed(1);
 
 const track = $('track');
@@ -4940,9 +4967,11 @@ canvas.addEventListener('pointermove', (ev) => {
 canvas.addEventListener('pointercancel', endMarquee);
 // a drag or the wheel takes a recorded player camera back to the free one
 canvas.addEventListener('pointermove', (ev) => {
-  if (state.camPlayer && (ev.buttons & ~1) && downAt && Math.hypot(ev.clientX - downAt[0], ev.clientY - downAt[1]) > 5) setCamPlayer(0);
+  if (!(ev.buttons & ~1) || !downAt || Math.hypot(ev.clientX - downAt[0], ev.clientY - downAt[1]) <= 5) return;
+  if (state.camPlayer) setCamPlayer(0);
+  if (state.followAction) setFollowAction(false);
 });
-canvas.addEventListener('wheel', () => setCamPlayer(0), { passive: true });
+canvas.addEventListener('wheel', () => { setCamPlayer(0); if (state.followAction) setFollowAction(false); }, { passive: true });
 /**
  * Every shown unit whose body centre projects inside the screen box (the same fog / filter test as picking); buildings
  * only when the box holds no unit (the 2D map's boxed). Shift adds to the selection.
@@ -5046,17 +5075,19 @@ const raidToasts = new RaidToasts({
 
 // Player View: whose vision, camera or unit the view follows; one click hands it back to the free spectator view (no
 // fog, free camera, no follow). While already free it opens Layers & settings, where the vision and camera are chosen.
-const povFree = () => !state.vision && !state.camPlayer && !(state.follow && state.selected);
+const povFree = () => !state.vision && !state.camPlayer && !state.followAction && !(state.follow && state.selected);
 let povKey = '';
 function syncPov() {
   const vis = state.vision ? $('vision').selectedOptions[0]?.textContent ?? 'custom' : '';
   const parts = [vis && `${vis} vision`, state.camPlayer && `${playerName(state.camPlayer)}'s camera`,
-    state.follow && state.selected && `following ${R.nameAt(state.selected, state.t)}`].filter(Boolean);
+    state.follow && state.selected && `following ${R.nameAt(state.selected, state.t)}`,
+    state.followAction && 'following the action'].filter(Boolean);
   const key = parts.join('|');
   if (key === povKey && $('povBtn').textContent) return;
   povKey = key;
   const b = $('povBtn');
   b.classList.toggle('on', !!parts.length);
+  $('followAction').classList.toggle('on', state.followAction);
   b.textContent = parts.length ? `👁 POV: ${parts[0].replace(/ vision$/, '')}${parts.length > 1 ? ' +' : ''} ✕` : '👁 Player View: OFF';
   b.title = parts.length ? `Viewing as: ${parts.join(' · ')}. Click for the free spectator view`
     : 'Free spectator view: no fog, free camera. Click to choose a player\'s vision or camera (Layers & settings)';
@@ -5065,7 +5096,7 @@ $('povBtn').addEventListener('click', () => {
   if (povFree()) { setTab('layers'); return; }
   state.vision = 0; $('vision').value = '0';
   setCamPlayer(0);
-  state.follow = false;
+  state.follow = false; state.followAction = false;
   renderInspector(true);
   syncPov();
 });
@@ -5096,8 +5127,9 @@ window.addEventListener('keydown', (ev) => {
   } else if (ev.code === 'KeyF' && state.selected && canFollow(state.selected)) { state.follow = !state.follow; renderInspector(true); }
   else if (ev.code === 'Escape') { if ($('trendsModal').classList.contains('open')) showTrends(false); else { moments?.close(); select(null); } }
   else if (ev.code === 'KeyK') legend.toggle();
+  else if (ev.code === 'KeyG') setFollowAction(!state.followAction);
   else if ((ev.code === 'KeyN' || ev.code === 'KeyP') && moments) moments.step(ev.code === 'KeyN' ? 1 : -1);
-  else if (ev.code === 'Home') { setCamPlayer(0); state.follow = false; controls.target.set(0, 20, 0); camera.position.set(0, 300, 270); }
+  else if (ev.code === 'Home') { setCamPlayer(0); state.follow = false; state.followAction = false; controls.target.set(0, 20, 0); camera.position.set(0, 300, 270); }
   else if (ev.code === 'KeyC') setCamPlayer(CAM_ORDER[(CAM_ORDER.indexOf(state.camPlayer) + 1) % CAM_ORDER.length]);
   else if (ev.code === 'ArrowUp' || ev.code === 'ArrowDown') ev.preventDefault();
 });

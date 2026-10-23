@@ -22,9 +22,9 @@
     showAttacks: false, showHeat: false, showAlerts: false, showDmg: true, showHeals: true, showShots: true, showSplash: false, showRange: false,
     showTrails: true, showOrders: true, showEcoOrders: false, showLabels: false,
     showTerrain: true, showResources: true, showComp: true, showCams: false, showCaster: true, showEcoDebt: true,
-    selected: null, group: null, hover: null, follow: false, fight: null, dirty: true, mouse: null,
+    selected: null, group: null, hover: null, follow: false, followAction: false, fight: null, dirty: true, mouse: null,
   };
-  let M, map, tl, caster;
+  let M, map, tl, caster, director;
   let anchorWall = performance.now(), anchorT = S.t;
   const reanchor = (now = performance.now()) => { anchorWall = now; anchorT = S.t; S.dirty = true; };
   const clockTime = now => Math.min(M.duration, anchorT + (now - anchorWall) / 1000 * SPEEDS[S.speedIdx]);
@@ -82,6 +82,7 @@
     buildHeader();
     caster = RV_CASTER.create($("#casterHud"), M);
     map = new RV.MapView($("#map"), M, S);
+    director = RV.director(M);
     // Alt is a selection modifier, not the browser's menu/link action.
     for (const event of ["mousedown", "mouseup", "click"]) $("#map").addEventListener(event, ev => {
       if (ev.altKey) ev.preventDefault();
@@ -159,6 +160,19 @@
     renderFightDetail();
     highlightFightList();
   };
+  // Follow (F) keeps the camera on the selected unit; Follow action (G) sends it where the fighting is (director.js).
+  // One of them owns the camera at a time; a drag or the wheel on the map ends either.
+  function toggleFollow() {
+    S.follow = !S.follow;
+    if (S.follow) S.followAction = false;
+    S.dirty = true;
+    renderUnit(true);
+  }
+  function toggleFollowAction() {
+    S.followAction = !S.followAction;
+    if (S.followAction && S.follow) { S.follow = false; renderUnit(true); }
+    S.dirty = true;
+  }
 
   // ---------- header ----------
   function buildHeader() {
@@ -282,6 +296,7 @@
     $("#faster").onclick = () => setSpeed(S.speedIdx + 1);
     $("#metric").onchange = ev => { tl.metric = ev.target.value; S.dirty = true; };
     $("#watchGame").onclick = () => watchInGame(false);
+    $("#followAction").onclick = toggleFollowAction;
     $("#fightSort").onchange = buildFightList;
     bindOptionMenus();
     bindCompass();
@@ -306,7 +321,8 @@
         case "]": jumpFight(1); break;
         case "n": case "N": stepMoment(1); break;
         case "p": case "P": stepMoment(-1); break;
-        case "f": case "F": if (S.selected) { S.follow = !S.follow; S.dirty = true; renderUnit(true); } break;
+        case "f": case "F": if (S.selected) toggleFollow(); break;
+        case "g": case "G": toggleFollowAction(); break;
         case "k": case "K": showKey($("#legend").hidden); break;
         case "h": case "H": $("#optCaster").click(); break;
         case "Escape":
@@ -806,7 +822,7 @@
     box.append(h("div", { class: "card rvc-unit-card" },
       RV_CARD.explorer(M.combat, e, tAt, cd, p, iconOf(e, p ? p.color : "#9ca3af", 56), death),
       h("div", { class: "actions" },
-        h("button", { onclick: () => { S.follow = !S.follow; S.dirty = true; renderUnit(true); } }, S.follow ? "Stop following" : "Follow (F)"),
+        h("button", { onclick: toggleFollow }, S.follow ? "Stop following" : "Follow (F)"),
         h("button", { onclick: () => S.seek(e.born) }, "Go to creation"),
         e.died != null ? h("button", { onclick: () => S.seek(e.died - 5) }, "Go to death") : null),
       RV_CARD.debug([["ID", e.id], ["Blueprint", e.bp], ["Category", e.cat], ["Squad", e.squad || "-"],
@@ -927,13 +943,16 @@
   }
 
   // ---------- main loop ----------
-  let lastPanel = 0;
+  let lastPanel = 0, lastFrame = 0;
   function frame(now) {
+    const dt = Math.min(0.1, (now - lastFrame) / 1000);
+    lastFrame = now;
     if (S.playing) {
       S.t = clockTime(now);
       if (S.t >= M.duration) S.playing = false;
       S.dirty = true;
     }
+    if (S.followAction && map.chase(director.shot(S.t), dt)) S.dirty = true;
     caster.update(S.t, S.showCaster, now, S.showEcoDebt);
     if (S.dirty) {
       S.dirty = false;
@@ -947,6 +966,11 @@
       else if ($("#notice").textContent.startsWith("Recording starts")) showNotice("");
     }
     $("#play").textContent = S.playing ? "Pause" : "Play";
+    const fa = $("#followAction");
+    if (fa.classList.contains("on") !== S.followAction) {
+      fa.classList.toggle("on", S.followAction);
+      fa.setAttribute("aria-pressed", String(S.followAction));
+    }
     $("#speed").textContent = SPEEDS[S.speedIdx] + "x";
     if (now - lastPanel > 250) {
       lastPanel = now;

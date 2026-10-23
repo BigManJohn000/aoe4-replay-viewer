@@ -13,7 +13,7 @@
           (viewer.js ASSET_MAP adds hand-tuned entries) and anything missing gets procedural owner-tinted shapes.
           Their textures are KTX2 (Basis), transcoded in the browser by vendor/three/examples/jsm/libs/basis/.
   Keys:  Space play/pause · ←/→ seek 5 s (Shift 30 s) · [ / ] previous/next fight · N / P next/previous key moment ·
-         −/+ speed (0.25–32×) · WASD pan · Q/E rotate · F follow · K map key · Esc clear · Home reset view
+         −/+ speed (0.25–32×) · WASD pan · Q/E rotate · F follow · G follow the action · K map key · Esc clear · Home reset view
 -->
 <html lang="en">
 <head>
@@ -410,7 +410,7 @@
       <details id="help"><summary>Controls</summary>
         <kbd>Drag</kbd> select box · <kbd>Right-drag</kbd> orbit · <kbd>Middle-drag</kbd> / <kbd>Shift+right-drag</kbd> pan · <kbd>Wheel</kbd> zoom · <kbd>WASD</kbd> pan · <kbd>Q/E</kbd> rotate<br>
         <kbd>Space</kbd> play · <kbd>← →</kbd> seek 5 s (Shift 30 s) · <kbd>[ ]</kbd> previous/next fight · <kbd>− +</kbd> speed<br>
-        <kbd>F</kbd> follow · dbl-click follow · <kbd>C</kbd> player cameras · <kbd>K</kbd> map key · <kbd>N P</kbd> next/previous key moment · <kbd>Esc</kbd> deselect · <kbd>Home</kbd> reset view
+        <kbd>F</kbd> follow · dbl-click follow · <kbd>G</kbd> follow the action · <kbd>C</kbd> player cameras · <kbd>K</kbd> map key · <kbd>N P</kbd> next/previous key moment · <kbd>Esc</kbd> deselect · <kbd>Home</kbd> reset view
       </details>
       <details id="debugBox"><summary>Debug</summary>
         <label title="Raw facts on the unit card: entity id, blueprint, squad, status, visual tier, lifetime, position, telemetry"><input type="checkbox" id="optDebug"> Debug info on the unit card</label>
@@ -425,6 +425,7 @@
   <button id="play" title="Play / pause (Space)">▶</button>
   <div id="speeds"><button id="slower" title="Slower (−)">−</button><span id="speed">1×</span><button id="faster" title="Faster (+)">+</button></div>
   <div id="time">0:00 / 0:00</div>
+  <button id="followAction" title="Follow the action: the camera goes where the fighting is, like a caster. A drag, the wheel or WASD takes the camera back (G)">🎥 Follow action</button>
   <select id="metric" title="What the timeline curves plot, per player">
     <option value="armyValue">Army value (resources)</option>
     <option value="military">Military units</option>
@@ -446,6 +447,7 @@
 <script src="shared/fights.js"></script>
 <script src="shared/fightpanel.js"></script>
 <script src="shared/model.js"></script>
+<script src="shared/director.js"></script>
 <script src="shared/card.js"></script>
 <script src="shared/map.js"></script>
 <script type="module" src="viewer.js"></script>
