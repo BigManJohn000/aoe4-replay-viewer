@@ -336,7 +336,7 @@
         </select></div>
       <div id="fights"></div>
       <details id="fightBox" hidden open><summary id="fightTitle">Engagement</summary><div id="fightPanel"></div></details>
-      <details open><summary>Kill feed</summary><div id="kills"></div></details>
+      <details><summary>Kill feed</summary><div id="kills"></div></details>
       <details id="momentsBox" hidden open><summary id="momentsTitle">Key moments</summary><div id="momentList"></div></details>
     </section>
     <section class="pane" data-pane="eco" hidden>
@@ -368,7 +368,7 @@
       </section>
       <section>
         <h3>Alerts</h3>
-        <label title="A short notice on the left edge when an attack starts somewhere quiet for 15 s; click it to jump there"><input type="checkbox" id="optToasts" checked> Under-attack notifications</label>
+        <label title="A short notice on the left edge when an attack starts somewhere quiet for 15 s; click it to jump there"><input type="checkbox" id="optToasts"> Under-attack notifications</label>
       </section>
       <section>
         <h3>Graphics</h3>
@@ -382,18 +382,18 @@
         <label><input type="checkbox" id="optBars" checked> Health bars <span class="n"><select id="optBarMode"><option value="auto">damaged</option><option value="all">all</option></select></span></label>
         <label><input type="checkbox" id="optDmg" checked> Damage numbers &amp; flash</label>
         <label><input type="checkbox" id="optCombatFx" checked> Combat FX <span class="n">(splash, muzzle, heals)</span></label>
-        <label><input type="checkbox" id="optAttacks" checked> Attack lines &amp; alert rings</label>
+        <label><input type="checkbox" id="optAttacks"> Attack lines &amp; alert rings</label>
         <label title="Colour attack lines by target choice: green good (the best target in reach), yellow ok, red poor"><input type="checkbox" id="optHeat"> Target fire</label>
         <label><input type="checkbox" id="optProjectiles" checked> Projectiles</label>
         <label><input type="checkbox" id="optKills" checked> Kill markers</label>
-        <label><input type="checkbox" id="optFights" checked> Engagement zones</label>
+        <label><input type="checkbox" id="optFights"> Engagement zones</label>
         <label><input type="checkbox" id="optGrid" checked> Tactical grid</label>
         <label><input type="checkbox" id="optGaia" checked> Nature &amp; resources</label>
         <label><input type="checkbox" id="optGrass" checked> Grass (close up)</label>
         <label><input type="checkbox" id="optShadows" checked> Shadows</label>
-        <label title="Dashed line from each army squad to where it was last ordered to move, ending in a ring (the 2D viewer's Orders)"><input type="checkbox" id="optOrders" checked> Move orders</label>
+        <label title="Dashed line from each army squad to where it was last ordered to move, ending in a ring (the 2D viewer's Orders)"><input type="checkbox" id="optOrders"> Move orders</label>
         <label title="The same for villagers' orders (gather, build, deliver …)"><input type="checkbox" id="optEcoOrders"> Eco orders</label>
-        <label title="The path army units covered in the last 6 s"><input type="checkbox" id="optTrails" checked> Trails</label>
+        <label title="The path army units covered in the last 6 s"><input type="checkbox" id="optTrails"> Trails</label>
         <label title="What each player's screen showed, from the replay's camera records"><input type="checkbox" id="optCams"> Player cameras</label>
         <label title="Army unit names beside the units, once zoomed in close"><input type="checkbox" id="optLabels"> Unit names</label>
         <label title="The army and villagers in view, per player, as the Vision setting shows them"><input type="checkbox" id="optComp" checked> Army on screen</label>

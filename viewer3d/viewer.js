@@ -1029,9 +1029,9 @@ const state = {
   t: R.t0, playing: false, speed: 1, unitScale: 2.5, adaptiveScale: true, scaleNow: 2.5,
   cats: new Set(R.ents.map((e) => e.cat).filter((c) => c !== 'attachment')),
   players: new Set(R.players.keys()), vision: 0, ghosts: false, // vision: player bit mask whose fog applies (0: none)
-  opt: { bars: true, barMode: 'auto', dmg: true, combatFx: true, attacks: true, heat: false, projectiles: true, kills: true, fights: true, grid: true, gaia: true, grass: true, shadows: true, ao: true,
-    orders: true, ecoOrders: false, trails: true, cams: false, labels: false, comp: true, // the 2D viewer's defaults for what they share
-    toasts: true, debugCard: false }, // under-attack notices (hud.js); raw facts on the unit card
+  opt: { bars: true, barMode: 'auto', dmg: true, combatFx: true, attacks: false, heat: false, projectiles: true, kills: true, fights: false, grid: true, gaia: true, grass: true, shadows: true, ao: true,
+    orders: false, ecoOrders: false, trails: false, cams: false, labels: false, comp: true,
+    toasts: false, debugCard: false }, // under-attack notices (hud.js); raw facts on the unit card
   selected: null, hovered: null, follow: false, quality: 'high', // quality: 'high' | 'low' (applyQuality); selected: the lone selected entity (section 8)
   camPlayer: 0, // player index whose recorded camera drives the view (0: free camera)
   followAction: false, // Follow action (G): the camera goes where the fighting is (shared director.js)
@@ -4337,7 +4337,10 @@ const chip = (color) => `<span class="chip" style="background:${color}"></span>`
   $('camView').disabled = CAM_ORDER.length < 2;
   $('camView').addEventListener('change', (ev) => { setCamPlayer(+ev.target.value); ev.target.blur(); });
   $('optGhosts').addEventListener('change', (ev) => { state.ghosts = ev.target.checked; });
-  const bind = (id, key, apply) => $(id).addEventListener('change', (ev) => { state.opt[key] = ev.target.checked; apply?.(); });
+  const bind = (id, key, apply) => {
+    $(id).checked = state.opt[key]; // state.opt holds the defaults
+    $(id).addEventListener('change', (ev) => { state.opt[key] = ev.target.checked; apply?.(); });
+  };
   bind('optBars', 'bars');
   bind('optDmg', 'dmg');
   bind('optCombatFx', 'combatFx');

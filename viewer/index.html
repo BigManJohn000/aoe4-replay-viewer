@@ -31,8 +31,8 @@
     <div class="option-menu">
       <button type="button" class="option-toggle" data-options="Layers" aria-controls="layerOptions" aria-expanded="false">Layers ▾</button>
       <div id="layerOptions" class="option-popover" hidden>
-    <label><input type="checkbox" id="optTrails" checked> Trails</label>
-    <label><input type="checkbox" id="optOrders" checked> Orders</label>
+    <label><input type="checkbox" id="optTrails"> Trails</label>
+    <label><input type="checkbox" id="optOrders"> Orders</label>
     <label><input type="checkbox" id="optEcoOrders"> Eco orders</label>
     <label><input type="checkbox" id="optLabels"> Labels</label>
     <label title="Elevation shading and contour lines"><input type="checkbox" id="optTerrain" checked> Relief</label>
@@ -90,8 +90,7 @@
       </section>
       <section id="tab-players" hidden>
         <div id="playerStats"></div>
-        <h4>Recent kills</h4>
-        <div id="killFeed"></div>
+        <details id="killFeedBox"><summary>Recent kills</summary><div id="killFeed"></div></details>
       </section>
       <section id="tab-eco" hidden>
         <div id="ecoPanel"></div>

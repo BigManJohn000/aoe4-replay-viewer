@@ -20,7 +20,7 @@
   const S = {
     t: 0, playing: false, speedIdx: 2, viewMask: 0,
     showAttacks: false, showHeat: false, showAlerts: false, showDmg: true, showHeals: true, showShots: true, showSplash: false, showRange: false,
-    showTrails: true, showOrders: true, showEcoOrders: false, showLabels: false,
+    showTrails: false, showOrders: false, showEcoOrders: false, showLabels: false,
     showTerrain: true, showResources: true, showComp: true, showCams: false, showCaster: true, showEcoDebt: true,
     selected: null, group: null, hover: null, follow: false, followAction: false, fight: null, dirty: true, mouse: null,
   };
