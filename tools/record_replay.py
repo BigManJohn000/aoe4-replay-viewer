@@ -34,6 +34,7 @@ import time
 import uuid
 import winreg
 from pathlib import Path
+import psutil
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
@@ -42,6 +43,8 @@ import aoe4input as ai  # noqa: E402
 import convert  # noqa: E402
 import recfile  # noqa: E402
 import runlock  # noqa: E402
+import rlog as grammar  # noqa: E402
+from atomicio import atomic_write_text  # noqa: E402
 
 APP_ID = "1466860"
 
@@ -158,6 +161,8 @@ class ScarLog:
         self.path = path
         self.offset = 0
         self.lines: list[str] = []
+        stat = path.stat()
+        self.identity = (stat.st_dev, stat.st_ino)
 
     @classmethod
     def wait_for_session(cls, after: float, timeout: float) -> "ScarLog":
@@ -165,7 +170,7 @@ class ScarLog:
         while time.time() < deadline:
             for d in sorted(LOG_DIR.glob("AoE4_*"), key=lambda p: p.stat().st_mtime, reverse=True):
                 if d.stat().st_ctime >= after - 5:
-                    logs = list(d.glob("scarlog.*.txt"))
+                    logs = sorted(d.glob("scarlog.*.txt"), key=lambda p: p.stat().st_mtime, reverse=True)
                     if logs:
                         return cls(logs[0])
             time.sleep(1)
@@ -173,6 +178,9 @@ class ScarLog:
 
     def poll(self) -> list[str]:
         with open(self.path, "rb") as f:
+            stat = os.fstat(f.fileno())
+            if (stat.st_dev, stat.st_ino) != self.identity or stat.st_size < self.offset:
+                raise RecordError("scarlog rotated or shrank; capture aborted")
             f.seek(self.offset)
             data = f.read()
         cut = data.rfind(b"\n")
@@ -336,24 +344,73 @@ class RecordError(RuntimeError):
     pass
 
 
-def close_game() -> None:
-    subprocess.run(["taskkill", "/F", "/IM", ai.GAME_EXE], capture_output=True)
-    # the process can outlive taskkill by several seconds; a back-to-back run would then refuse to start
-    deadline = time.time() + 60
-    while ai.game_pid() is not None and time.time() < deadline:
-        time.sleep(1)
+def game_identity(pid: int | None) -> tuple[int, float] | None:
+    if pid is None:
+        return None
+    try:
+        return pid, psutil.Process(pid).create_time()
+    except psutil.Error:
+        return None
+
+
+def close_game(identity: tuple[int, float] | None) -> None:
+    """Never kill an unknown process or a reused PID, even if it has the game's executable name."""
+    if identity is None:
+        print("  Game PID unknown; leaving any running game untouched")
+        return
+    pid, created = identity
+    try:
+        process = psutil.Process(pid)
+        if process.create_time() != created:
+            print("  Game PID was reused; leaving the replacement process untouched")
+            return
+        process.kill()
+        process.wait(timeout=60)
+    except psutil.NoSuchProcess:
+        pass
+
+
+class CaptureHealth:
+    def __init__(self):
+        self.last_t = None
+        self.errors = 0
+        self.gaps = 0
+        self.header = False
+
+    def add(self, line: str) -> None:
+        record = line.strip()
+        if not record.startswith(("HDR|", "ERR|", "T|")):
+            record = record.split("R|", 1)[-1]
+        if record.startswith("HDR|"):
+            self.header = True
+        elif record.startswith("ERR|"):
+            self.errors += 1
+        elif record.startswith("T|"):
+            try:
+                t = float(record.split("|")[1])
+            except ValueError:
+                self.errors += 1
+                return
+            if self.last_t is not None and (t < self.last_t or
+                    t - self.last_t > 2 * grammar.TICKS_PER_SAMPLE / grammar.TICKS_PER_SECOND):
+                self.gaps += 1
+            self.last_t = t
+
+    def complete(self, duration: float) -> bool:
+        return (self.header and self.last_t is not None and not self.errors and not self.gaps
+                and reached_end(self.last_t, duration))
 
 
 def is_complete(rlog: Path, duration: float) -> bool:
-    """Whether a recording reached the replay's end: its last T record, read from the file's tail."""
-    if not rlog.exists():
+    """Stream the recording: require a header, end coverage, no ERR, and no >2-interval gaps."""
+    health = CaptureHealth()
+    try:
+        with rlog.open(encoding="utf-8", errors="replace") as stream:
+            for line in stream:
+                health.add(line)
+    except OSError:
         return False
-    with open(rlog, "rb") as f:
-        f.seek(0, os.SEEK_END)
-        f.seek(max(0, f.tell() - 262144))
-        tail = f.read().decode("utf-8", errors="replace")
-    times = re.findall(r"(?m)^T\|([\d.]+)", tail)
-    return bool(times) and reached_end(float(times[-1]), duration)
+    return health.complete(duration)
 
 
 def record(src: Path, rec: recfile.Replay, speed: float, keep_open: bool) -> tuple[Path, bool]:
@@ -372,14 +429,24 @@ def record(src: Path, rec: recfile.Replay, speed: float, keep_open: bool) -> tup
     started = time.time()
     subprocess.Popen([str(STEAM_EXE), "-applaunch", APP_ID, "-dev", "-replay", f"playback:{name}"])
     print("Launching game (it will pop up once; feel free to switch away)...")
+    identity = None
     try:
+        deadline = time.time() + 180
+        while identity is None and time.time() < deadline:
+            candidate = game_identity(ai.game_pid())
+            if candidate and candidate[1] >= started - 1:
+                identity = candidate
+                print(f"Game process: {identity[0]}|{identity[1]}", flush=True)
+                break
+            time.sleep(0.1)
+        if identity is None:
+            raise RecordError("launched game PID could not be identified")
         log = ScarLog.wait_for_session(started, timeout=180)
         if not log.wait_for(r"ClassicStart_PostInit|Starting mission|CoreTrainingGoals_OnInit", timeout=240):
             raise RecordError("replay never reached the match")
         hwnd = ai.game_window()
         if hwnd is None:
             raise RecordError("game window not found")
-        time.sleep(2)
 
         console = Console(log, hwnd)
         console.open(probe_first=False)  # fresh launch: the console is closed, and a probe would type into the replay UI
@@ -388,18 +455,24 @@ def record(src: Path, rec: recfile.Replay, speed: float, keep_open: bool) -> tup
         except ConsoleError as e:
             print(f"  could not slow the sim during injection: {e}")
         print("Loading recorder...")
-        console.load(RECORDER.read_text(encoding="utf-8"), "aoe4_recorder_run.lua")
+        nonce = uuid.uuid4().hex
+        console.load(f'RR_NONCE="{nonce}"\n' + RECORDER.read_text(encoding="utf-8"), "aoe4_recorder_run.lua")
         status = [l for l in log.lines if re.search(r"R\|(READY|ALREADY|ERR\|install)", l)]
-        if not status or "R|READY|" not in status[-1]:
-            raise RecordError(f"recorder failed to start: {status[-1] if status else 'no status line'}")
+        if not status or not re.search(rf"R\|READY\|[\d.]+\|{nonce}(?:\s|$)", status[-1]):
+            raise RecordError(f"recorder failed session handshake: {status[-1] if status else 'no status line'}")
         rate = SIM_TICKS_PER_SECOND * speed
         console.set_sim_rate(rate)
         print(f"Recording at sim rate {rate:g} ({speed:g}x requested)...")
 
         last_t, last_progress = 0.0, time.time()
         rate_t0 = rate_w0 = last_w = None  # game time and scarlog stamp of the first and latest T records
+        health = CaptureHealth()
+        seen = 0
         while True:
-            for line in log.poll():
+            log.poll()
+            lines, seen = log.lines[seen:], len(log.lines)
+            for line in lines:
+                health.add(line)
                 m = re.search(r"R\|T\|([\d.]+)", line)
                 if m:
                     last_t, last_w = float(m.group(1)), log_clock(line)
@@ -425,12 +498,14 @@ def record(src: Path, rec: recfile.Replay, speed: float, keep_open: bool) -> tup
         skip = ("ACK", "NAK", "SUM")
         records = [l.split("R|", 1)[1] for l in log.lines if "R|" in l]
         records = [r for r in records if r.split("|", 1)[0] not in skip]
-        out.write_text("\n".join(records) + "\n", encoding="utf-8")
+        atomic_write_text(out, f"CAPTURE|errors={health.errors}|gaps={health.gaps}\n" + "\n".join(records) + "\n")
         print(f"Wrote {len(records)} records to {out}")
+        if health.errors or health.gaps:
+            print(f"  recording is incomplete: {health.errors} recorder errors, {health.gaps} sample gaps")
     finally:
         if not keep_open:
-            close_game()
-    return out, reached_end(last_t, duration)
+            close_game(identity)
+    return out, health.complete(duration)
 
 
 def record_many(paths: list[Path], speed: float, game_dir: Path) -> None:
@@ -441,6 +516,7 @@ def record_many(paths: list[Path], speed: float, game_dir: Path) -> None:
     done = other_build = 0
     skipped: list[str] = []
     names: dict[str, Path] = {}
+    converted = False
     for f in files:
         if f.stem in names:  # the recording is named after the file, so the second one would overwrite the first
             skipped.append(f"{f}: same name as {names[f.stem]}")
@@ -456,8 +532,9 @@ def record_many(paths: list[Path], speed: float, game_dir: Path) -> None:
             continue
         rlog = ROOT / "recordings" / (f.stem + ".rlog")
         if is_complete(rlog, rec.duration_seconds):
-            if not (convert.DATA_DIR / (f.stem + ".js")).exists():
-                convert.convert(rlog, f)
+            if not convert.payload_valid(convert.DATA_DIR / (f.stem + ".js")):
+                convert.convert(rlog, f, publish=False)
+                converted = True
             done += 1
             continue
         todo.append(f)
@@ -466,6 +543,9 @@ def record_many(paths: list[Path], speed: float, game_dir: Path) -> None:
     for s in skipped:
         print("  skipped", s)
     if not todo:
+        if converted:
+            convert.write_index()
+            print(convert.trends.update())
         return
     if ai.game_pid() is not None:
         raise SystemExit("Age of Empires IV is already running; close it first")
@@ -479,7 +559,8 @@ def record_many(paths: list[Path], speed: float, game_dir: Path) -> None:
             try:
                 rlog, complete = record(f, recfile.load(f), speed, keep_open=False)
                 if complete:
-                    convert.convert(rlog, f)
+                    convert.convert(rlog, f, publish=False)
+                    converted = True
                 else:
                     print("  recording is incomplete; this replay is retried on the next run")
             except Exception as e:  # one replay failing must not end the run; the game is already closed
@@ -501,6 +582,10 @@ def record_many(paths: list[Path], speed: float, game_dir: Path) -> None:
     except KeyboardInterrupt:
         print("\nStopped. Run the same command again to continue where it left off.")
         raise SystemExit(130) from None
+    finally:
+        if converted:
+            convert.write_index()
+            print(convert.trends.update())
     total = time.time() - t0
     print(f"\nRecorded {recorded} of {len(todo)} in {hours(total)} ({clock(total / n)} per replay)")
     if failed:
@@ -512,8 +597,11 @@ def record_many(paths: list[Path], speed: float, game_dir: Path) -> None:
 
 
 def main() -> None:
-    with runlock.hold("recording"):  # other tools that use the game or many cores can wait for this marker
-        record_main()
+    try:
+        with runlock.hold("recording"):
+            record_main()
+    except runlock.LockError as e:
+        raise SystemExit(str(e)) from None
 
 
 def record_main() -> None:

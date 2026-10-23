@@ -414,7 +414,9 @@ function resolveBlueprint(ebps) {
   const main = fl.find(([p]) => p.endsWith('/entity_blueprint_ext/animator_attachments/$PBGNAME'))?.[1];
   const tiers = fl.filter(([p, v]) => p.endsWith('/tier_ext/tier_group_list/tier_group/tier/attachments/$PBGNAME') && v).map(([, v]) => v);
   const lists = [main, ...tiers].map(animList);
-  const base = lists.find((l) => l.parent)?.parent;
+  const parent = lists.find((l) => l.parent)?.parent;
+  // Cavalry attachment lists may name the horse-only source; the baked rider rig is combined.
+  const base = parent === 'base_horse' ? 'base_horse_combined' : parent;
   if (!base) return null;
   const extra = [], jobs = {};
   for (const { inv, arch } of lists.flatMap((l) => l.anims)) {

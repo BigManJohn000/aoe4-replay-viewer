@@ -50,8 +50,12 @@
   button.on { background: var(--accent); color: #111; border-color: var(--accent); }
   .chip { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: -1px; margin-right: 5px; }
 
-  #topbar { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); display: flex; flex-wrap: wrap; justify-content: center;
-    gap: 4px 14px; align-items: center; padding: 6px 14px; font-size: 13px; max-width: calc(100% - 620px); width: max-content; }
+  body { --header-left: 10px; --header-right: 10px; }
+  body:has(#inspector:not(.hidden)) { --header-left: 300px; }
+  body:not(.drawer-closed) { --header-right: 320px; }
+  #topbar { position: fixed; top: 10px; left: var(--header-left); right: var(--header-right); margin-inline: auto; display: flex; flex-wrap: wrap; justify-content: center;
+    gap: 4px 14px; align-items: center; padding: 6px 14px; font-size: 13px; max-width: calc(100% - var(--header-left) - var(--header-right)); width: max-content; }
+  body.drawer-closed #right { top: var(--below-top, 90px); }
   #topbar .pl { display: flex; align-items: center; gap: 6px; font-weight: 600; }
   #topbar .civ { color: var(--muted); font-weight: 400; font-size: 11px; }
   #topbar .age { font-size: 11px; color: var(--accent); font-weight: 700; min-width: 18px; }
@@ -266,6 +270,13 @@
   #legendShow { position: fixed; left: 10px; bottom: 86px; color: var(--muted); }
   #comp { position: fixed; top: var(--below-top, 56px); right: 320px; max-width: 340px; max-height: calc(100% - 200px); overflow-y: auto; font-size: 12px; padding: 6px 8px; }
   body.drawer-closed #comp { right: 10px; }
+  body.drawer-closed #comp { top: calc(var(--below-top, 90px) + 42px); }
+  @media (max-width: 1100px) {
+    body:has(#inspector:not(.hidden)), body:not(.drawer-closed) { --header-left: 10px; --header-right: 10px; }
+    #right, #inspector { top: var(--below-top, 90px); max-height: calc(100% - var(--below-top, 90px) - 180px); }
+    #topbar { gap: 4px 10px; }
+    #topbar .match { overflow-wrap: anywhere; }
+  }
   #comp[hidden], #caption[hidden] { display: none; }
   #comp .ch { color: var(--muted); font-size: 11px; margin-bottom: 2px; }
   .cp { display: flex; align-items: center; gap: 5px; margin-top: 4px; white-space: nowrap; }

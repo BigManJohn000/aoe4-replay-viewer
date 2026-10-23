@@ -77,7 +77,7 @@
         const rate = ep && ep.rates[RES[r]] ? ep.rates[RES[r]].rate : DEFAULT_RATE[r];
         cell.title = "Unspent " + RES[r] + "; villagers gathering; estimated income/min = gatherers × " +
           (rate * 60).toFixed(1) + " per villager/min (" + (ep && ep.rates[RES[r]] ? ep.rates[RES[r]].source : "default") +
-          " no-tech rate from RV_ECO). Estimate excludes trade, relics and other income; not a recorded income rate.";
+          " no-tech rate from RV_ECO) × completed gather multipliers. Estimate excludes trade, relics and other income; not a recorded income rate.";
         resources.push({ bank, income, rate });
       }
       const bottom = el("div", "caster-bottom", null, box);
@@ -208,7 +208,8 @@
         for (let r = 0; r < 4; r++) {
           const res = s.resources[r], g = job ? job[r + 1] : null;
           text(res.bank, number(st ? st[r + 1] : null));
-          text(res.income, "+" + number(g == null ? null : g * res.rate * 60) + "/min · " + number(g) + " v");
+          const multiplier = eco ? window.RV_ECO.multiplierAt(d, M.combat, s.p.idx, RES[r], t) : 1;
+          text(res.income, "+" + number(g == null ? null : g * res.rate * multiplier * 60) + "/min · " + number(g) + " v");
         }
         research(s, t);
         debt(s, t, showDebt);

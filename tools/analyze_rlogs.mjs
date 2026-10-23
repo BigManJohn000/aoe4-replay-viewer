@@ -6,21 +6,46 @@ import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import { performance } from 'node:perf_hooks';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DATA = path.join(ROOT, 'viewer/data');
 const OUT = path.join(ROOT, 'harvest/analysis');
-const VERSION = 7;
+const VERSION = 8;
 const MAY = 10307814;
 const TILE_METRES = 4; // statsAt.range is tiles; recorded positions and timing ranges are metres (model.js CONVERT_R).
-const scripts = ['units', 'stats', 'frame', 'model', 'fights', 'eco'].map(name =>
-  new vm.Script(fs.readFileSync(path.join(ROOT, `viewer/${name}.js`), 'utf8'), { filename: `viewer/${name}.js` }));
+const engineFiles = ['units', 'stats', 'frame', 'model', 'fights', 'eco'].map(name => `viewer/${name}.js`);
+const engineDigest = createHash('sha256').update(String(VERSION)).update(fs.readFileSync(fileURLToPath(import.meta.url)));
+const scripts = engineFiles.map(filename => {
+  const source = fs.readFileSync(path.join(ROOT, filename), 'utf8');
+  engineDigest.update(filename).update(source);
+  return new vm.Script(source, { filename });
+});
+const ENGINE_HASH = engineDigest.digest('hex');
+const indexText = fs.readFileSync(path.join(DATA, 'index.js'), 'utf8');
+const published = new Set(JSON.parse(/window\.REPLAY_INDEX\s*=\s*(\[[^;]*\])\s*;/.exec(indexText)[1])
+  .filter(name => fs.existsSync(path.join(DATA, `${name}.js`))));
+const sourceHashes = new Map();
+function sourceHash(name) {
+  if (!sourceHashes.has(name)) sourceHashes.set(name, createHash('sha256').update(fs.readFileSync(path.join(DATA, `${name}.js`))).digest('hex'));
+  return sourceHashes.get(name);
+}
+function currentCache(record, name) {
+  return published.has(name) && record.name === name && record.schemaVersion === VERSION &&
+    record.engineHash === ENGINE_HASH && record.sourceHash === sourceHash(name);
+}
+function atomicWrite(filename, text) {
+  const temporary = `${filename}.${process.pid}.tmp`;
+  const fd = fs.openSync(temporary, 'w');
+  try { fs.writeFileSync(fd, text); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+  fs.renameSync(temporary, filename);
+}
 const args = process.argv.slice(2);
 const force = args.includes('--force');
 const includeAll = args.includes('--all');
 if (args.some(a => a.startsWith('--') && !['--force', '--all'].includes(a))) throw new Error('Usage: node tools/analyze_rlogs.mjs [--force] [--all] [names...]');
 const names = [...new Set(args.filter(a => !a.startsWith('--')).map(a => path.basename(a).replace(/\.js$/, '')))];
-if (!names.length) names.push(...fs.readdirSync(DATA).filter(n => /^aoe4_.*\.js$/.test(n)).map(n => n.slice(0, -3)).sort());
+if (!names.length) names.push(...[...published].sort());
 fs.mkdirSync(OUT, { recursive: true });
 let logLines = 0;
 // Reserve five of the 60 permitted output lines for final summaries; synchronous writes also flush correctly when stdout is piped on Windows.
@@ -36,7 +61,7 @@ const plus = (o, key, n = 1) => { o[key] = (o[key] || 0) + n; };
 async function loadHarvestMetadata() {
   const database = path.join(ROOT, 'harvest/aoe4.db');
   if (!fs.existsSync(database)) return new Map();
-  const candidates = [...names, ...fs.readdirSync(OUT).filter(n => n.endsWith('.json')).map(n => n.replace(/\.json$/, ''))];
+  const candidates = [...published];
   const ids = [...new Set(candidates.map(n => /^aoe4_(\d+)$/.exec(n)?.[1]).filter(Boolean).map(Number))];
   if (!ids.length) return new Map();
   const sql = `SELECT game_id,started_at,map,p0,p1,p0_name,p1_name,p0_mmr,p1_mmr,p0_civ,p1_civ FROM games WHERE game_id IN (${ids.map(() => '?').join(',')})`;
@@ -317,17 +342,8 @@ function analyze(name) {
   for (let k = 0; k < C.dmgT.length; k++) {
     const t = C.dmgT[k], victim = C.byId.get(C.dmgId[k]), amount = C.dmgAmt[k];
     addAt(victim, t, 'damageTaken', amount);
-    let sources = C.dmgSrc[k];
-    // Match frame.js's one-second fallback and base-stat hit weights, including its dominant-weapon dmgBonus flag.
-    if (!sources) {
-      const who = new Set(), drop = C.dmgDrop[k];
-      for (let i = F.idxAt(C.atkT, drop); i >= 0 && C.atkT[i] > drop - 1; i--) {
-        const pairs = C.atkP[i]; for (let j = 1; j < pairs.length; j += 2) if (pairs[j] === victim.id) who.add(pairs[j - 1]);
-      }
-      sources = [...who].map(id => C.byId.get(id)).filter(Boolean).map(a => ({ a, dtype: { Melee: 'melee', Ranged: 'pierce', Siege: 'siege', Fire: 'fire' }[F.statOf(a.bp)?.main?.damage] || 'melee' }));
-    }
-    const target = F.statOf(victim.bp);
-    const weights = sources.map(bl => hit(null, weapon(F.statOf(bl.a.bp), bl.dtype), null, target));
+    // Use the exact upgraded-stat weights and fallback used by C.dealt in frame.js.
+    const weighted = F.damageWeights(C, k), sources = weighted.map(r => r.bl), weights = weighted.map(r => r.x);
     const total = weights.reduce((s, n) => s + n, 0);
     for (let j = 0; j < sources.length; j++) {
       const credit = total > 0 ? amount * weights[j] / total : 0;
@@ -347,7 +363,7 @@ function analyze(name) {
     if (isKilling && sources.length && !killingDrops.has(victim.id)) {
       const expected = sources.map(bl => {
         const sa = F.statsAt(C, bl.a, t), sb = F.statsAt(C, victim, t);
-        return sa ? hit(sa, weapon(sa.st, bl.dtype), sb, sb?.st || target) : null;
+        return sa ? hit(sa, weapon(sa.st, bl.dtype), sb, sb?.st || F.statOf(victim.bp)) : null;
       });
       if (expected.every(finite)) {
         killingDrops.add(victim.id);
@@ -774,7 +790,7 @@ function analyze(name) {
     benchmarkSource: r.benchSource, missedResources: r.missed, cost: r.cost, costTotal: r.costTotal, deficit: r.deficit,
     capitalized: r.capitalized, evidenceLabel: r.capitalized?.label ?? null, rateSource: r.rateSource, assumption: r.assumption })));
   const units = [...rows.values()].map(finishRow).sort((a, b) => a.player - b.player || a.type.localeCompare(b.type));
-  return { schemaVersion: VERSION, name, duration: d.duration, players, units, map: d.summary?.map?.name ?? null, date: d.summary?.startedAt ?? d.replay?.date ?? null,
+  return { schemaVersion: VERSION, engineHash: ENGINE_HASH, sourceHash: sourceHash(name), name, duration: d.duration, players, units, map: d.summary?.map?.name ?? null, date: d.summary?.startedAt ?? d.replay?.date ?? null,
     siege: units.filter(r => r.siege),
     healers: units.filter(r => r.healer),
     fights, eco, counters: [...counterCells.values()], runtimeSeconds: (performance.now() - started) / 1000 };
@@ -958,14 +974,14 @@ function writeViewerBenchmark(a) {
   const json = JSON.stringify(bench, (_key, value) => typeof value === 'number' ? finite(value) ? Number(value.toPrecision(3)) : null : value ?? null);
   const text = `${header}\nwindow.RV_BENCH = ${json};\n`, bytes = Buffer.byteLength(text);
   if (bytes >= 40000) throw new Error(`viewer/rv_bench.js exceeds the 40 KB limit (${bytes} bytes)`);
-  fs.writeFileSync(path.join(ROOT, 'viewer/rv_bench.js'), text);
+  atomicWrite(path.join(ROOT, 'viewer/rv_bench.js'), text);
   log(`Benchmark: viewer/rv_bench.js; ${bytes} bytes; ${rows.length} unit types`, true);
 }
 
 const definitions = [
   'Scope: player-owned non-building units; entity-owner counts split conversions. Alive seconds union recorded visibility spans, clipped to replay duration. Tier counts use first ownership tier; tier seconds include upgrades. Names ignore tier adjectives/Roman suffixes, not civ-specific unit identities.',
   'Blows = all viewer-reconstructed attacks. Shots include bl.shot projectiles AND non-torch pierce/ranged-category/horse-archer blows (crossbow/gun zero-flight attacks are instantaneous shots); projectileShots/instantRangedShots separate these. Misses/guesses use viewer flags. Kills use C.kills; dealt uses C.dealt; taken sums recorded HP drops; no invented credit.',
-  'Bonus share = credited damage on drops with C.dmgBonus=1 / dealt; this is a dominant-weapon bonus flag, NOT the fraction of HP attributable to a bonus. Attribution repeats frame.js base-hit weights/fallback. Splash share uses C.dmgSplash / dealt.',
+  'Bonus share = credited damage on drops with C.dmgBonus=1 / dealt; this is a dominant-weapon bonus flag, NOT the fraction of HP attributable to a bonus. Attribution shares frame.js time-resolved hit weights/fallback. Splash share uses C.dmgSplash / dealt.',
   'Theoretical DPS = blow-weighted mean of upgraded (weapon attack + matching target class/unit bonuses) / statsAt.period, before armour, without burst multiplier. Unknown stats excluded. Effective DPS = dealt / engaged unit-seconds; ratio divides by theoretical mean.',
   'Armour-adjusted DPS = blow-weighted max(1, upgraded attack + applicable bonuses - upgraded victim armour of matching damage type)/period; unknown victim stats excluded. Effective/after-armour divides effective DPS by that mean. Armour mitigation=1-summed after-armour DPS/summed paper DPS using the SAME known-victim blows and target mix.',
   'Unit uptime = union of [blow, blow+period] attack-cycle seconds / engaged seconds, clipped to alive spans and split by owner (timing-period fallback if stats absent). This inferred cycle occupancy is not measured animation time. 1-waste uses unioned missed/post-death blows; killing-excess share is estimated excess HP/dealt.',
@@ -992,12 +1008,12 @@ const definitions = [
   'Micro calibration percentiles use all finite side-fight values. Higher-component win rate uses decided two-team fights with both sides >=300 unique military value attacking/targeted/damaged in area/window, excludes component ties (n), and needs both finite components. Corr is point-biserial Pearson(value,win) over those paired sides including ties (corrN); descriptive, not causal or independent observations. Output: micro_calibration.json.',
   'ratingHigherWins counts decided two-team fights won by the higher v2 score, once per participating cohort. Both team ratings must be version 2 with finite scores; score ties (within 1e-9) are counted separately and excluded from n. Share=wins/n, null when n=0; unlike raw-component calibration this comparison has no minimum engaged-value filter.',
   'Lanchester uses upgraded DPS vs enemy mix x current HP at fight start, P(A)=logistic(log(powerA/powerB)/1.5), bounded .01-.99; outcome is lower army+villager value loss (within 10% draws). Accuracy excludes draws/null; Brier is mean squared probability error on decided A/B fights.',
-  'Eco copies RV_ECO: ontime/late/never/na; completion actual vs opponent-start-adjusted or own-age benchmark. Missed = delayed gatherer-seconds x base rate x incremental multiplier (Wheelbarrow trip model); never integrates to replay end. Deficit = missed - cost.',
+  'Eco copies RV_ECO: ontime/late/never/na; completion actual vs opponent-start-adjusted or own-age benchmark. Missed = delayed gatherer-seconds x base rate x incremental multiplier (Wheelbarrow trip model); never integrates to replay end. Deficit = missed for completed research; missed - unspent cost for never researched.',
   'Eco capitalized/evidence copies engine decision: constrained bank plus military spending AND tempo-window combat impact; not causal proof. Skip=never/eligible; delay=late/eligible (never separate); eligible excludes na/no benchmark. Mean missed/deficit/delay includes eligible on-time zeroes; capitalized share uses applies:true.',
   'Aggregation sums counts/time/HP and recomputes ratios; theoretical is blow-weighted, distributions pool observation-weighted 0.001-unit histograms with interpolated p10/p25/p50/p75/p90. May=profile 10307814 (name only if id absent); rest=other player sides. Fight cohorts count participating fights once, ratings only selected teams. viewer/rv_bench.js exports all-player types with >=20 entity-owner units, lowercase tier-stripped keys (normaliser in header), sorted type/bin keys, numbers to 3 significant digits, missing metrics null and UTC generation date. Unit period is cadence-matched median with all-blow stats fallback; mangonel splash is enemy matched-control excess.',
   'Counter matrix: top 12 types by summed entity-owner count; ordered attacker/victim cells sum frame-weighted credited HP. Denominator sums attacker unit resource value x pair-type engaged seconds (union flag/blow windows plus credited splash victims, alive/owner/tier split); rate=HP*6000/resource-seconds. Different victim-type windows may overlap after switches. Direct K/L requires reciprocal SAME-ENTITY attacks inside the same fight time and 1.5*radius area; each credited kill counted once across overlapping fights, directFights counts windows with such a kill/death for this cell. Resource value=recorded entity value or stats cost; zero-loss ratios are null. Game cohorts partition all participants into May games vs no-May games.',
   'Dataset default includes exactly two-player recordings; --all includes other counts. Exclusions listed. MMR/map/date join harvest/aoe4.db read-only by game id; profile id comes ONLY from d.summary profile fields or DB, never replay command pid. DB slot matches profile, exact name, unique civ, then two-player order. May name fallback applies only without profile id. Mean MMR averages known player-recordings without zeroes.',
-  'Missing data: unknown ratios/quantiles are null; empty counters show zero in tables. Older absent optional collections become empty; failed recordings log once and do not stop batch. All compatible per-recording JSON files feed dataset selection, including cached/unselected recordings; failed selected names are excluded this run.',
+  'Missing data: unknown ratios/quantiles are null; empty counters show zero in tables. Older absent optional collections become empty; failed recordings log once and do not stop batch. Only indexed, existing payloads with matching source/engine hashes and schema feed aggregates; failed selected names are excluded this run.',
 ];
 const fmt = n => n == null || !finite(n) ? '—' : Math.abs(n) >= 1000 ? Math.round(n).toLocaleString('en-US') : Number(n.toFixed(2)).toString();
 const pct = n => !finite(n) ? '—' : `${fmt(n * 100)}%`;
@@ -1078,27 +1094,28 @@ function summary(a) {
 const failed = new Set();
 for (const name of names) {
   try {
-    const source = path.join(DATA, `${name}.js`), target = path.join(OUT, `${name}.json`);
-    const sourceStat = fs.statSync(source);
-    if (!force && fs.existsSync(target) && fs.statSync(target).mtimeMs > sourceStat.mtimeMs) {
+    if (!published.has(name)) throw new Error('Recording is not published in viewer/data/index.js or its payload is missing');
+    const target = path.join(OUT, `${name}.json`);
+    if (!force && fs.existsSync(target)) {
       const cachedText = fs.readFileSync(target, 'utf8'), cached = JSON.parse(cachedText);
-      if (cached.schemaVersion === VERSION) {
+      if (currentCache(cached, name)) {
         const refreshed = JSON.stringify(attachMetadata(cached));
-        if (refreshed !== cachedText) fs.writeFileSync(target, refreshed);
+        if (refreshed !== cachedText) atomicWrite(target, refreshed);
         log(`${name}: cached`); continue;
       }
     }
     const recording = attachMetadata(analyze(name));
-    fs.writeFileSync(target, JSON.stringify(recording));
+    atomicWrite(target, JSON.stringify(recording));
     log(`${name}: ${recording.runtimeSeconds.toFixed(3)} s; ${recording.units.length} unit rows, ${recording.fights.length} fights`);
   } catch (error) { failed.add(name); log(`${name}: ERROR ${error.message}`); }
 }
 const records = [];
 for (const file of fs.readdirSync(OUT).filter(n => n.endsWith('.json') && !['aggregate.json', 'aggregate_v1.json', 'micro_calibration.json'].includes(n)).sort()) {
-  if (failed.has(file.slice(0, -5))) continue;
+  const name = file.slice(0, -5);
+  if (failed.has(name) || !published.has(name)) continue;
   try {
     const r = JSON.parse(fs.readFileSync(path.join(OUT, file), 'utf8'));
-    if (r.schemaVersion === VERSION && Array.isArray(r.players) && Array.isArray(r.units)) records.push(attachMetadata(r));
+    if (currentCache(r, name) && Array.isArray(r.players) && Array.isArray(r.units)) records.push(attachMetadata(r));
   } catch (error) { log(`${file}: ERROR ${error.message}`); }
 }
 // Default dataset is strictly two-player; --all opts into team/FFA recordings without discarding their per-recording analyses.
@@ -1113,9 +1130,9 @@ const restGames = selectedRecords.filter(r => !r.players.some(p => p.cohort === 
 combined.gameRecordingCounts = { mayGames: mayGames.length, restGames: restGames.length };
 combined.gameCohorts = { mayGames: aggregate(mayGames).cohorts.all, restGames: aggregate(restGames).cohorts.all };
 combined.microCalibration = microCalibration(selectedRecords);
-fs.writeFileSync(path.join(OUT, 'micro_calibration.json'), JSON.stringify(combined.microCalibration, null, 2));
-fs.writeFileSync(path.join(OUT, 'aggregate.json'), JSON.stringify(combined));
+atomicWrite(path.join(OUT, 'micro_calibration.json'), JSON.stringify(combined.microCalibration, null, 2));
+atomicWrite(path.join(OUT, 'aggregate.json'), JSON.stringify(combined));
 writeViewerBenchmark(combined);
-fs.writeFileSync(path.join(OUT, 'SUMMARY.md'), summary(combined));
+atomicWrite(path.join(OUT, 'SUMMARY.md'), summary(combined));
 log(`Aggregate: ${selectedRecords.length} recordings; excluded ${combined.excludedRecordings.length}; harvest/analysis/{aggregate.json,SUMMARY.md}`, true);
 if (failed.size) process.exitCode = 1;

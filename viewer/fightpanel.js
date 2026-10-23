@@ -98,13 +98,13 @@
     const who = (tm) => el("span", { style: { color: color(tm), fontWeight: 600 } }, name(tm));
     const chip = (tm, ...rest) => el("div", { class: "rvf-side" }, el("i", { style: { background: color(tm) } }), el("span", { class: "nm" }, name(tm)), ...rest);
     const L = A.lanchester;
-    const duel = !!(L && L.B !== undefined);
+    const duel = A.teams.length === 2;
     const box = el("div", { class: "rvf" });
     const card = el("div", { class: "rvf-card" });
     box.append(card);
 
     // ── Main card 1: who won and the value lost ──
-    card.append(el("div", { class: "rvf-h", title: "Resources (food + wood + gold + stone) of the units and buildings each side lost in this fight" }, "Who won · value lost"));
+    card.append(el("div", { class: "rvf-h", title: "Resources (food + wood + gold + stone) of the units and buildings each team lost in this fight" }, duel ? "Who won · value lost" : "Per-team value lost"));
     if (duel) {
       card.append(el("div", { class: "rvf-win", title: "The winner is the side that lost less army + villager value; within 10 % counts as an even trade" },
         L.actual === null ? "Even trade" : [who(L.actual === "A" ? L.A : L.B), " won"]));
@@ -242,10 +242,10 @@
 
     // 3. Tug-of-war
     const T = A.tug;
-    more.append(el("div", { class: "rvf-h", title: "Resource value killed by side A minus side B over the fight; dots are deaths. Click to seek." }, "Who was killing more (tug of war)"));
+    more.append(el("div", { class: "rvf-h", title: duel ? "Resource value killed by side A minus side B over the fight; dots are deaths. Click to seek." : "Known hostile kills credited separately to each team." }, duel ? "Who was killing more (tug of war)" : "Per-team kills"));
     more.append(el("div", { class: "rvf-muted" }, A.teams.map((tm) => `${name(tm)} killed ${k(T.final[tm])}`).join(" · ")));
     const cv = el("canvas", { title: "Click a point to go to that moment" });
-    more.append(cv);
+    if (duel) more.append(cv);
     let cursor = opts.t;
     const t0 = A.t0, t1 = Math.max(A.t1, A.t0 + 1);
     const lim = Math.max(1, ...T.series.map((s) => Math.abs(s[1])));
@@ -253,6 +253,7 @@
     const X = (t, w) => 4 + ((t - t0) / (t1 - t0)) * (w - 8);
     const Y = (v, h) => h / 2 - (v / lim) * (h / 2 - 6);
     const draw = () => {
+      if (!duel) return;
       const { w, h } = geom(), dpr = window.devicePixelRatio || 1;
       if (cv.width !== Math.round(w * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
       const g = cv.getContext("2d");

@@ -672,6 +672,10 @@
 
     // ── Lanchester ──
     function lanchester() {
+      if (teams.length !== 2) return {
+        result: { A: null, B: null, p: null, ratio: null, predicted: null, actual: null, correct: null, lost: null, strength: {}, expected: null, tau: TAU },
+        whatIf: () => null,
+      };
       const groups = new Map(); // sa → { sa, team, n, hp, value, building }
       const add = (e, t, building) => {
         const sa = Fr.statsAt(C, e, t);
@@ -730,10 +734,10 @@
         const tm = teamOfPlayer(+pi);
         if (tm != null && lost[tm] !== undefined) lost[tm] += (l.army || 0) + (l.vill || 0);
       }
-      const la = lost[tA] || 0, lb = teams.slice(1).reduce((s, tm) => s + lost[tm], 0), mx = Math.max(la, lb);
+      const la = lost[tA] || 0, lb = lost[tB] || 0, mx = Math.max(la, lb);
       const actual = mx === 0 || Math.abs(la - lb) < 0.1 * mx ? null : la < lb ? "A" : "B";
       const predicted = base.power.A.P > 0 || base.power.B.P > 0 ? (base.p > 0.5 ? "A" : "B") : null;
-      const toSide = (s) => (s === "A" || s === "B" ? s : teams.length > 2 ? (s === tA ? "A" : "B") : s === tA ? "A" : s === tB ? "B" : null);
+      const toSide = (s) => (s === "A" || s === "B" ? s : s === tA ? "A" : s === tB ? "B" : null);
       const result = {
         A: tA, B: tB, p: base.p, ratio: base.ratio, predicted, actual, correct: actual === null || predicted === null ? null : actual === predicted,
         lost: { A: la, B: lb },
@@ -1081,7 +1085,7 @@
       for (const tm of a.teams) { const r = a.rating[tm]; ratings[tm] = { score: r.score, letter: r.letter }; }
       const L = a.lanchester;
       return { index: i, id: f.id, t0: a.t0, t1: a.t1, duration: a.t1 - a.t0, x: a.x, z: a.z, radius: a.radius, teams: a.teams, ratings,
-        winner: L.actual, winnerTeam: L.actual === "A" ? a.A : L.actual === "B" ? a.B : null, p: L.p, predicted: L.predicted, correct: L.correct,
+        winner: L.actual, winnerTeam: a.teams.length !== 2 ? null : L.actual === "A" ? a.A : L.actual === "B" ? a.B : null, p: L.p, predicted: L.predicted, correct: L.correct,
         deaths: f.deaths, damage: f.damage, lost: a.lost.total, impact: a.impact, tags: a.tags.map((t) => t.tag) };
     });
   };

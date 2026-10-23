@@ -14,10 +14,14 @@ import math
 import re
 import sqlite3
 import statistics
+import sys
 import time
 import urllib.request
 import zlib
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from atomicio import atomic_write_text  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 DB = ROOT / "harvest/aoe4.db"
@@ -49,9 +53,9 @@ NOTES = [
     "Observational associations, not causal effects; both players can appear in all-player rows. Wilson 95% binomial intervals do not account for repeated players or paired games.",
     "Benchmark is median completion minus age arrival among observed researchers; Feudal for four techs, Castle for Shaft Mining. Civ-specific at n>=30, otherwise global. On-time <= benchmark+60s, delayed >+60s; never researched is skipped only if game end >= benchmark+300s, else censored. Unavailable techs or missing required age are ineligible.",
     "Action times are checked against buildOrder Upgrade.finished by technology pbgid. First action timestamp is used; 0-1s differences are summary rounding. Actions represent completion, not click, when the comparison supports it.",
-    "Missed value uses left-held PerMin samples /60 times (m-1)/m, as requested; Wheelbarrow m=1.5/(1.5*(1-walkShare)+walkShare/1.15), walk shares food .12, wood .30, gold/stone .25. No resource-specific gatherer counts are assumed.",
+    "Missed value uses left-held PerMin samples /60 times (m-1): observed income in the delay window does not include the missing tech. Wheelbarrow m=1.5/(1.5*(1-walkShare)+walkShare/1.15), walk shares food .12, wood .30, gold/stone .25. No resource-specific gatherer counts are assumed.",
     "Multipliers use metadata effects; Shaft Mining's empty effects are filled from its description, matching audited stats.js (gold/stone x1.15, Mongol gold only). Civ variants retain their metadata costs and effects.",
-    "Net deficit = missed gather minus full food+wood+gold+stone tech cost; negative means saved cost exceeds modelled loss. No interest, opportunity discount, age-up cost or income causal attribution is modelled.",
+    "Deficit = missed gather for completed research; subtract the unspent food+wood+gold+stone tech cost only for skipped research. No interest, opportunity discount, age-up cost or income causal attribution is modelled.",
     "Rates are held to the next sample and the final sample to game end; unobserved leading time or missing/invalid series make the affected resource estimate unavailable rather than zero.",
     "Unit costs come from units/all.json matched by pbgid and civ; values are food+wood+gold+stone catalogue costs, not actual discounted spend. Metadata classes identify military/villagers, with icon classification only for unmapped units. Missing unit costs propagate unavailable metrics and are counted, never silently valued at zero.",
     "Controls are ON-TIME players for the same tech whose benchmark is within +/-60s of the target benchmark, measured over the target's exact absolute [benchmark,min(actual,end)] interval. Controls must survive through its end. Baseline median/p75 and metric-specific sample counts are retained; no controls means no baseline-dependent classification.",
@@ -463,11 +467,11 @@ def analyse(db_rows: list[sqlite3.Row], technologies: list[dict], units: list[di
                     if multiplier == 1:
                         continue
                     income = integrate(player, res, bench, end)
-                    missed[res] = income * (multiplier-1)/multiplier if income is not None else None
+                    missed[res] = income * (multiplier-1) if income is not None else None
                 row["missed_by_resource"] = missed
                 if all(value is not None for value in missed.values()):
                     row["missed_gather"] = sum(missed.values())
-                    row["net_deficit"] = row["missed_gather"] - sum(tech["costs"].get(res, 0) for res in RES)
+                    row["net_deficit"] = row["missed_gather"] - (sum(tech["costs"].get(res, 0) for res in RES) if status == "skipped" else 0)
             elif status == "on-time":
                 row["missed_gather"] = 0.0
                 row["net_deficit"] = 0.0  # No delay window: no hypothetical saved cost.
@@ -844,10 +848,10 @@ def main() -> None:
     army["errors"] = data["errors"]
     army_markdown = army_report(army)
     OUT.mkdir(parents=True, exist_ok=True)
-    (OUT / "eco_summaries.json").write_text(json.dumps(data, indent=2, allow_nan=False), encoding="utf-8")
-    (OUT / "ECO_SUMMARY.md").write_text(markdown, encoding="utf-8")
-    (OUT / "army_summaries.json").write_text(json.dumps(army,indent=2,allow_nan=False),encoding="utf-8")
-    (OUT / "ARMY_SUMMARY.md").write_text(army_markdown,encoding="utf-8")
+    atomic_write_text(OUT / "eco_summaries.json", json.dumps(data, indent=2, allow_nan=False))
+    atomic_write_text(OUT / "ECO_SUMMARY.md", markdown)
+    atomic_write_text(OUT / "army_summaries.json", json.dumps(army,indent=2,allow_nan=False))
+    atomic_write_text(OUT / "ARMY_SUMMARY.md", army_markdown)
     # Keep each run under 60 console lines even as new civ variants appear.
     items = list(data["mapping"].items())
     for i in range(0, len(items), 2):

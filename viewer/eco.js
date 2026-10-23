@@ -19,7 +19,7 @@
 //     rates { resource: { rate, source, n } } (the player's measured no-tech rates, see "Base rate"),
 //     rateSource "measured" | "default" | "mixed",
 //     missed    resources not gathered because of the delay,
-//     deficit   late/never: missed − costTotal (negative: delay saved more than it cost); ontime: 0; na: null,
+//     deficit   late: missed; never: missed − unspent costTotal; ontime: 0; na: null,
 //     tempo     { t0: tBench+90, t1: tBench+180 },
 //     capitalized { yes, label, applies, bank{...}, impact{...}, reason },
 //     assumption text.
@@ -53,7 +53,8 @@
 // Base rate (not in the data): per player and resource, the effective rate per villager is
 //   r0 = Σ income / Σ g·M(t)·dt over sliding 90 s windows (step 30 s), income = Δbank + spend. Bank: d.stats[idx]
 //   (food, wood, gold, stone). Spend is a ledger: units (cost at born − production time), buildings (cost when placed),
-//   researched techs (cost at completion − research time; Delhi's cost 0 is 0), all from stats.js. The windows' rates are
+//   researched techs (cost at completion − research time; Delhi's cost 0 is 0). Entities use first-birth recorder quotes
+//   when available, otherwise stats.js catalogue costs. The windows' rates are
 //   divided by the stacked multiplier so r0 is the no-tech rate; the median of windows with ≥ 250 villager-seconds is
 //   clamped to [0.3, 1.5]. Fewer than 4 windows: DEFAULT_RATE (rateSource "default"). Unrecorded income (relics, sacred
 //   sites, trade, herdables) and unledgered spend (conversions) make the gold rate noisy; the median absorbs them.
@@ -236,18 +237,18 @@
     if (/barracks|archery|stable|siege|workshop|military|arsenal|dock_mil/.test(bp)) return "mil";
     return "eco";
   }
-  const MIL_CAT = new Set(["infantry", "cavalry", "ranged", "siege", "religious", "naval"]);
+  const MIL_CAT = new Set(window.RV_UNITS.military);
 
   /** Spend ledger of one player: [{ t, c: [f,w,g,s], k: "eco"|"mil"|"def"|"tech"|"other" }] sorted by time. */
   function ledger(C, d, idx) {
     const rows = [], rs = d.recordStart || 0;
     const FR = F();
+    const quotes = new Map((d.entities || []).filter((e) => e.cost != null).map((e) => [e.id, e.cost]));
     for (const e of C.ents) {
       if (e.owner !== idx || e.born <= rs + 0.01) continue;
       if (e.cat === "attachment" || e.cat === "livestock" || e.cat === "gaia") continue;
       const st = FR.statOf(e.bp);
-      if (!st || !st.cost) continue;
-      const c = st.cost;
+      const quote = quotes.get(e.id), c = quote ? { f: quote[0], w: quote[1], g: quote[2], s: quote[3], t: st?.cost?.t || 0 } : st?.cost;
       if (!sum4(c)) continue;
       let t, k;
       if (e.cat === "building") { t = e.born; k = bldClass(e.bp); }
@@ -306,6 +307,20 @@
     for (const e of P.ev) if (e.t <= t && e.slot !== excl) m *= e.f[r];
     return m;
   }
+  E.multiplierAt = function (d, C, idx, res, t) {
+    const P = E.analyze(d, C)._env.P.get(idx), r = RES.indexOf(res);
+    return P && r >= 0 ? stack(P, r, t, null) : 1;
+  };
+  // Every held job interval is split at completed modifiers, including calibration windows.
+  function cuts(P, a, b) {
+    return [a, ...new Set(P.ev.filter((e) => e.t > a && e.t < b).map((e) => e.t)), b].sort((x, y) => x - y);
+  }
+  function multiplierSeconds(P, r, a, b, excl) {
+    const points = cuts(P, a, b);
+    let total = 0;
+    for (let i = 1; i < points.length; i++) total += stack(P, r, points[i - 1], excl) * (points[i] - points[i - 1]);
+    return total;
+  }
   const spendTo = (P, t) => idxAt(P.lt, t) + 1; // number of ledger rows with time ≤ t
   function spendBetween(P, a, b, r) { return P.lc[r][spendTo(P, b)] - P.lc[r][spendTo(P, a)]; }
   function spendClass(P, a, b, k) { return P.lk[k][spendTo(P, b)] - P.lk[k][spendTo(P, a)]; }
@@ -317,7 +332,7 @@
     // Σ g·M·dt prefix per resource
     for (let r = 0; r < 4; r++) {
       const cum = new Float64Array(n + 1);
-      for (let i = 0; i < n; i++) cum[i + 1] = cum[i] + P.G[r][i] * stack(P, r, T[i], null) * P.dt[i];
+      for (let i = 0; i < n; i++) cum[i + 1] = cum[i] + P.G[r][i] * multiplierSeconds(P, r, T[i], T[i] + P.dt[i], null);
       const rates = [];
       if (n) {
         for (let t = T[0]; t + MEASURE.win <= P.end; t += MEASURE.step) {
@@ -347,17 +362,20 @@
     if (collect) collect.push([t0, 0]);
     for (let i = Math.max(0, idxAt(P.T, t0)); i < P.n && P.T[i] < t1; i++) {
       const a = Math.max(P.T[i], t0), b = Math.min(i + 1 < P.n ? P.T[i + 1] : P.end, t1);
-      const dt = b - a;
-      if (dt <= 0) continue;
-      for (const r of resIdx) {
-        const g = P.G[r][i] * dt;
-        if (!g) continue;
-        const rb = rates[RES[r]].rate * stack(P, r, a, slot);
-        const m = g * rb * (f[RES[r]] - 1);
-        missed += m; base += g * rb; gsec += g;
-        const p = per[RES[r]]; p.gatherSec += g; p.missed += m; p.base += g * rb;
+      const points = cuts(P, a, b);
+      for (let j = 1; j < points.length; j++) {
+        const left = points[j - 1], right = points[j], dt = right - left;
+        if (dt <= 0) continue;
+        for (const r of resIdx) {
+          const g = P.G[r][i] * dt;
+          if (!g) continue;
+          const rb = rates[RES[r]].rate * stack(P, r, left, slot);
+          const m = g * rb * (f[RES[r]] - 1);
+          missed += m; base += g * rb; gsec += g;
+          const p = per[RES[r]]; p.gatherSec += g; p.missed += m; p.base += g * rb;
+        }
+        if (collect) collect.push([right, missed]);
       }
-      if (collect) collect.push([b, missed]);
     }
     return { missed, base, gsec, per };
   }
@@ -371,7 +389,7 @@
 
   // ── tempo window ──
   function impactOf(env, p, tb) {
-    const { d, C, teamOf, bldPos } = env;
+    const { d, C, teamOf, buildings } = env;
     const t0 = tb + TEMPO[0], t1 = Math.min(env.end, tb + TEMPO[1]);
     const mine = teamOf.get(p), res = { window: [t0, t1], enemyIdle: 0, kills: 0, villagerKills: 0, killValue: 0, structureDamage: 0, heldDefense: 0, hits: [] };
     if (t1 <= t0) return res;
@@ -394,7 +412,9 @@
     for (const k of C.kills || []) {
       if (k.t < t0 || k.t > t1 || k.killer == null) continue;
       const v = C.byId.get(k.victim), a = C.byId.get(k.killer);
-      if (!v || !a || teamOf.get(v.owner) === undefined || teamOf.get(a.owner) !== mine || teamOf.get(v.owner) === mine) continue;
+      if (!v || !a) continue;
+      const vo = F().ownerAt(v, k.t), ao = F().ownerAt(a, k.t);
+      if (!teamOf.has(vo) || teamOf.get(ao) !== mine || teamOf.get(vo) === mine) continue;
       res.kills++;
       if (v.cat === "villager") res.villagerKills++;
       res.killValue += v.value || sum4((F().statOf(v.bp) || {}).cost);
@@ -404,19 +424,20 @@
       const t = C.dmgT[i];
       if (t < t0 || t > t1) continue;
       const v = C.byId.get(C.dmgId[i]);
-      if (v && v.cat === "building" && teamOf.has(v.owner) && teamOf.get(v.owner) !== mine) res.structureDamage += C.dmgAmt[i];
+      const owner = v && F().ownerAt(v, t);
+      if (v && v.cat === "building" && teamOf.has(owner) && teamOf.get(owner) !== mine) res.structureDamage += C.dmgAmt[i];
     }
     // held defence: a fight around the player's buildings that the enemy team lost
-    const bl = bldPos.get(p) || [];
     for (const f of d.fights || []) {
       if (f.end < t0 || f.start > t1) continue;
       const parts = f.participants || [];
       if (!parts.some((q) => teamOf.get(q) === mine) || !parts.some((q) => teamOf.has(q) && teamOf.get(q) !== mine)) continue;
       const reach = (f.radius || 0) + IMPACT.heldRadius;
       let near = false;
-      for (const b of bl) {
-        if (b.born > f.end || (b.died && b.died < f.start)) continue;
-        const dx = b.x - f.x, dz = b.z - f.z;
+      for (const b of buildings) {
+        const at = Math.max(f.start, t0, b.born);
+        if (at > f.end || (b.died != null && b.died < at) || F().ownerAt(b, at) !== p) continue;
+        const dx = b.x[0] - f.x, dz = b.z[0] - f.z;
         if (dx * dx + dz * dz <= reach * reach) { near = true; break; }
       }
       if (!near) continue;
@@ -476,7 +497,7 @@
       cap.reason = "Bank below cost with " + fmt(cap.bank.spentMilitary + cap.bank.spentDefense) + " res on military/defence; tempo " + cap.impact.hits.join(", ") + " in " + fmtT(cap.impact.window[0]) + "–" + fmtT(cap.impact.window[1]) + ".";
     } else {
       cap.reason = (row.deficit >= 0 ? "Pure eco deficit of " + fmt(row.deficit) + " res" : "Pure eco delay, net +" + fmt(-row.deficit) + " res (the unspent cost outweighs the loss)") +
-        " (missed " + fmt(row.missed) + " − cost " + fmt(row.costTotal) + "): " + why.join("; ") + ".";
+        " (missed " + fmt(row.missed) + (row.tActual == null ? " − unspent cost " + fmt(row.costTotal) : "; research paid") + "): " + why.join("; ") + ".";
     }
     return cap;
   }
@@ -532,7 +553,7 @@
     let meas = 0;
     for (const i of resIdx) { row.rates[RES[i]] = rates[RES[i]]; if (rates[RES[i]].source === "measured") meas++; }
     row.rateSource = meas === resIdx.length ? "measured" : meas ? "mixed" : "default";
-    row.deficit = row.status === "na" ? null : late ? row.missed - row.costTotal : 0;
+    row.deficit = row.status === "na" ? null : late ? row.missed - (tActual == null ? row.costTotal : 0) : 0;
     row.capitalized = capitalize(env, P, row);
     const tail = mine ? "" : " Never researched: integrated to the end of the replay (" + fmtT(env.end) + ").";
     row.assumption = (def.kind === "trip"
@@ -548,13 +569,8 @@
     for (const p of d.players) enemies.set(p.idx, d.players.filter((q) => q.team !== p.team || p.team == null).map((q) => q.idx).filter((q) => q !== p.idx));
     const P = new Map();
     for (const p of d.players) P.set(p.idx, prep(d, C, p.idx, end));
-    const bldPos = new Map();
-    for (const e of C.ents) {
-      if (e.cat !== "building" || !teamOf.has(e.owner)) continue;
-      if (!bldPos.has(e.owner)) bldPos.set(e.owner, []);
-      bldPos.get(e.owner).push({ x: e.x[0], z: e.z[0], born: e.born, died: e.died });
-    }
-    return { d, C, end, teamOf, enemies, P, bldPos };
+    const buildings = C.ents.filter((e) => e.cat === "building");
+    return { d, C, end, teamOf, enemies, P, buildings };
   }
 
   E.analyze = function (d, C, opts) {

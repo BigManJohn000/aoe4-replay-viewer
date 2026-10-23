@@ -18,6 +18,7 @@ import argparse
 import gzip
 import io
 import json
+import os
 import sys
 import time
 import urllib.error
@@ -29,6 +30,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 
 import recfile  # noqa: E402
+from atomicio import atomic_write_text  # noqa: E402
 
 MAY = 10307814
 DST = ROOT / "replays" / "may"
@@ -89,6 +91,41 @@ def unpack(raw: bytes) -> bytes:
     return raw
 
 
+class InvalidReplay(ValueError):
+    pass
+
+
+def publish_replay(path: Path, raw: bytes) -> recfile.Replay:
+    """Validate a temporary download before publication; retain bad responses as .rec.bad."""
+    temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        temporary.write_bytes(raw)
+        try:
+            data = unpack(raw)
+            with temporary.open("wb") as stream:
+                stream.write(data)
+                stream.flush()
+                os.fsync(stream.fileno())
+            replay = recfile.load(temporary)
+        except Exception as e:
+            os.replace(temporary, path.with_suffix(".rec.bad"))
+            raise InvalidReplay(f"invalid replay quarantined: {e}") from e
+        os.replace(temporary, path)
+        return replay
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def existing_replay(path: Path) -> recfile.Replay | None:
+    if not path.exists():
+        return None
+    try:
+        return recfile.load(path)
+    except Exception:
+        os.replace(path, path.with_suffix(".rec.bad"))
+        return None
+
+
 def blueprint_table() -> None:
     table = {}
     for kind in ("units", "buildings", "technologies"):
@@ -97,7 +134,7 @@ def blueprint_table() -> None:
             if x.get("pbgid") and x.get("attribName"):
                 table[str(x["pbgid"])] = x["attribName"]
         time.sleep(PAUSE)
-    BLUEPRINTS.write_text(json.dumps(table, sort_keys=True), encoding="utf-8")
+    atomic_write_text(BLUEPRINTS, json.dumps(table, sort_keys=True))
     print(f"Wrote {len(table)} blueprint names to {BLUEPRINTS}")
 
 
@@ -116,42 +153,50 @@ def main() -> None:
     print(f"{len(games)} ranked 1v1 games of May on patch {patch} lasting at least {args.min_seconds} s")
 
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8")) if MANIFEST.exists() else []
-    known = {m["game_id"] for m in manifest}
+    known = {m["game_id"] for m in manifest if m.get("status") != -2}
     added, missing, unreadable = 0, [], []
     for n, game in enumerate(games, 1):
         print(f"\r  {n}/{len(games)}", end="", flush=True)
         gid = game["game_id"]
         path = DST / f"may_{gid}.rec"
-        if not path.exists():
+        replay = existing_replay(path)
+        if replay is None:
+            known.discard(gid)
+            manifest = [m for m in manifest if m["game_id"] != gid]
+            manifest.append({"game_id": gid, "file": path.name, "date": game["started_at"][:10],
+                             "status": -2, "build": None})
             try:
-                path.write_bytes(unpack(fetch(REPLAY_URL.format(gid=gid, pid=MAY))))
+                replay = publish_replay(path, fetch(REPLAY_URL.format(gid=gid, pid=MAY)))
             except urllib.error.HTTPError as e:
                 if e.code == 429:
                     print(f"\n  still rate limited after retries; stopping at game {n}, run again later")
                     break
                 missing.append(f"{gid} (HTTP {e.code})")
                 continue
+            except InvalidReplay as e:
+                unreadable.append(f"{gid} ({e})")
+                continue
             finally:
                 time.sleep(PAUSE)
         if gid in known:
+            for entry in manifest:
+                if entry["game_id"] == gid:
+                    entry.update(build=replay.version, status=200)
             continue
-        try:
-            build = recfile.load(path).version
-        except ValueError as e:
-            unreadable.append(f"{gid} ({e})")
-            continue
+        build = replay.version
+        manifest = [m for m in manifest if m["game_id"] != gid]
         me, opp = sides(game)
         manifest.append({
             "game_id": gid, "file": path.name, "date": game["started_at"][:10], "map": game["map"],
             "minutes": round(game["duration"] / 60, 1), "result": me.get("result"),
             "may_civ": me.get("civilization"), "opponent": opp.get("name"),
             "opponent_civ": opp.get("civilization"), "opponent_rating": opp.get("rating"),
-            "build": build,
+            "build": build, "status": 200,
         })
         known.add(gid)
         added += 1
     manifest.sort(key=lambda m: m["date"], reverse=True)
-    MANIFEST.write_text(json.dumps(manifest, indent=1, ensure_ascii=False), encoding="utf-8")
+    atomic_write_text(MANIFEST, json.dumps(manifest, indent=1, ensure_ascii=False))
     print(f"\nManifest: {len(manifest)} games ({added} new); no replay on the server for {len(missing)}"
           + (": " + ", ".join(missing) if missing else ""))
     if unreadable:

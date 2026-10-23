@@ -60,8 +60,8 @@
     "The time to beat is an earlier opponent's research start, adjusted to this player's research time and age, or age arrival plus a measured median completion offset. The medians come from 1179 summaries / 1177 analysed ranked 1v1 games (2354 player-games), 2000+ MMR, patch 11308, analysed 2026-10-23 at 06:45 UTC by tools/analyze_summaries.py; global researcher counts are Wheelbarrow 1690, Double Broadax 1550, Horticulture 1356, Specialized Pick 1219 and Shaft Mining 573. Civ-specific medians require at least 30 researchers, otherwise the global median is used. Research time is not added to these completion offsets.",
     "Missed is the resources the player did not gather because the upgrade came late: from the time to beat until it finished (or until the game ended if never), the villagers on that resource times the gather speed the upgrade would have added. Gather speeds are estimated from each player's own bank and spending, since the recording has no gather rates. The figure shown grows with the replay clock; hover it for the final total.",
     "The verdict asks whether the delay bought something. \"Used tempo to attack\" needs both: the player's bank stayed low while their spending went mostly to army and defences, and within 90 to 180 seconds after the time to beat they hurt the enemy (enemy villagers idled, kills, damage to buildings, or a held defence). Otherwise the delay is \"Delayed (no attack)\": a pure economic loss.",
-    "Hover a row for the research cost, the net result (missed minus upgrade cost; negative when skipping the cost saved more than it lost) and the reason for its verdict. Click a row to jump to the time to beat.",
-    "In the 2D viewer, Layers → Eco debt toggles live caster chips and timeline delay lanes. Chips show at most two active/recent delays per player and retain their final missed amount and used/unused decision for 20 seconds after research. Timeline windows run from benchmark to research (or replay end); hatching means unused, and clicking a window seeks to its benchmark. Hover chips or lanes for lateness, cost, net deficit and the recorded capitalized evidence.",
+    "Hover a row for research cost, the deficit and the reason for its verdict. Completed research: deficit equals missed gather because its cost was paid in both scenarios. Never researched: subtract the unspent upgrade cost; a negative deficit means that saving exceeds missed gather. Click a row to jump to the time to beat.",
+    "In the 2D viewer, Layers → Eco debt toggles live caster chips and timeline delay lanes. Chips show at most two active/recent delays per player and retain their final missed amount and used/unused decision for 20 seconds after research. Timeline windows run from benchmark to research (or replay end); hatching means unused, and clicking a window seeks to its benchmark. Hover chips or lanes for lateness, cost, deficit and the recorded capitalized evidence.",
   ];
   // the how-it-works box keeps its open state across the viewers' once-a-second rebuilds
   let howOpen = false;
@@ -103,7 +103,7 @@
         const tip = [];
         if (Number.isFinite(r.rateBase)) tip.push(`Rate ${r.rateBase.toFixed(2)} → ${(Number.isFinite(r.rateUp) ? r.rateUp : r.rateBase).toFixed(2)} res per villager per second (${r.rateSource}).`);
         if (delayed) {
-          tip.push(`Upgrade cost ${res(r.costTotal)}; net ${r.deficit < 0 ? "−" : ""}${res(Math.abs(r.deficit))} (missed − cost).`);
+          tip.push(`Upgrade cost ${res(r.costTotal)}; deficit ${r.deficit < 0 ? "−" : ""}${res(Math.abs(r.deficit))} (${r.tActual == null ? "missed − unspent cost" : "missed; research paid"}).`);
           const win = (c.impact && c.impact.window) || (r.tempo && [r.tempo.t0, r.tempo.t1]);
           if (win) tip.push(`Tempo window ${clock(win[0])}–${clock(win[1])}.`);
           if (c.reason) tip.push(c.reason);

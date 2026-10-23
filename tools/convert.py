@@ -24,6 +24,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 import recfile  # noqa: E402
 import rlog  # noqa: E402
 import trends  # noqa: E402
+from atomicio import atomic_write_text  # noqa: E402
 
 DATA_DIR = ROOT / "viewer" / "data"
 
@@ -225,7 +226,7 @@ class Log:
     upgrades: list[dict]
     constructions: list[dict]
     stats: dict[int, list[list]]
-    costs: dict[tuple[int, str], dict]
+    costs: dict[tuple[int, str], list[dict]]
     orders: dict[int, list]
     samples: list[float]
     errors: list[str]
@@ -242,7 +243,7 @@ def parse_rlog(path: Path) -> Log:
     ents: list[Ent] = []
     attacks, kills, upgrades, constructions = [], [], [], []
     stats: dict[int, list[list]] = defaultdict(list)
-    costs: dict[tuple[int, str], dict] = {}
+    costs: dict[tuple[int, str], list[dict]] = defaultdict(list)
     orders: dict[int, list] = defaultdict(list)
     samples: list[float] = []
     jobs: dict[int, list[list]] = defaultdict(list)
@@ -258,14 +259,16 @@ def parse_rlog(path: Path) -> Log:
         elif kind == rlog.PLAYER:
             players[r.idx] = {"idx": r.idx, "pid": r.pid, "race": r.race, "team": r.team}
         elif kind == rlog.ENT_NEW:
-            e = removed.pop(r.id, None)
+            was_live = r.id in live
+            e = live.get(r.id) if was_live else removed.pop(r.id, None)
             if e is None:
                 e = Ent(r.id, r.owner, r.bp, r.maxhp, r.building, r.squad)
                 e.owners.append([r.t, e.owner])
                 ents.append(e)
             elif r.owner != e.owners[-1][1]:  # back under another player: a sacred site taken by the other side
                 e.owners.append([r.t, r.owner])
-            e.spans.append([r.t, None])
+            if not was_live:
+                e.spans.append([r.t, None])
             e.track += [r.t, r.x, r.z, r.hp]
             live[r.id] = e
         elif kind == rlog.ENT_STATE:
@@ -290,7 +293,12 @@ def parse_rlog(path: Path) -> Log:
         elif kind == rlog.DEST:
             orders[r.squad].append([r.t, r.x, r.z])
         elif kind == rlog.COST:
-            costs[(r.owner, r.bp)] = {"squad": r.squad, "cost": rlog.cost_values(r.cost)}
+            quotes = costs[(r.owner, r.bp)]
+            quote = {"t": r.t, "squad": r.squad, "cost": rlog.cost_values(r.cost)}
+            if r.t == float("-inf"):
+                quotes[:] = [quote]  # v4 retained the last timeless quote
+            else:
+                bisect.insort_right(quotes, quote, key=lambda q: q["t"])
         elif kind == rlog.STATS:
             stats[r.idx].append([r.t, *r.res, r.pop])
         elif kind == rlog.JOBS:
@@ -385,8 +393,23 @@ def resolve_kills(log: Log, by_id: dict[int, Ent]) -> list[dict]:
     return out
 
 
-def entity_value(e: Ent, costs: dict[tuple[int, str], dict]) -> float:
-    c = costs.get((e.owner, e.bp))
+def entity_quote(e: Ent, costs: dict[tuple[int, str], list[dict]]) -> dict | None:
+    quotes = costs.get((e.owner, e.bp), ())
+    i = bisect.bisect_right(quotes, e.born, key=lambda q: q["t"]) - 1
+    return quotes[i] if i >= 0 else None
+
+
+def entity_cost(e: Ent, costs: dict[tuple[int, str], list[dict]]) -> list[float] | None:
+    quote = entity_quote(e, costs)
+    if quote is None:
+        return None
+    values = {k.lower(): v for k, v in quote["cost"].items()}
+    divisor = quote["squad"] if quote["squad"] > 0 else 1
+    return [round(values.get(k, 0) / divisor, 1) for k in RESOURCES[:4]]
+
+
+def entity_value(e: Ent, costs: dict[tuple[int, str], list[dict]]) -> float:
+    c = entity_quote(e, costs)
     if not c:
         return 0.0
     total = sum(v for k, v in c["cost"].items() if k.lower() in RESOURCES or k.lower() == "merc_byz")
@@ -668,16 +691,30 @@ def load_summary(rlog: Path, rec_path: Path, players: list[dict]) -> dict | None
     return {k: v for k, v in block.items() if v not in (None, {})}
 
 
+def payload_valid(path: Path) -> bool:
+    """Validate the published assignment, not just its existence (an interrupted old writer may leave a fragment)."""
+    try:
+        text = path.read_text(encoding="utf-8")
+        prefix = f"(window.REPLAY_DATA = window.REPLAY_DATA || {{}})[{json.dumps(path.stem)}] = "
+        if not text.startswith(prefix) or not text.rstrip().endswith(";"):
+            return False
+        data = json.loads(text[len(prefix):].rstrip()[:-1])
+        return (isinstance(data, dict) and data.get("format") == 1 and data.get("name") == path.stem
+                and isinstance(data.get("entities"), list) and isinstance(data.get("capturedEnd"), (int, float)))
+    except (OSError, ValueError):
+        return False
+
+
 def write_index() -> None:
     """Refresh the replay and note catalogs; keep one window assignment per line for the 3D portal."""
     names = sorted(p.stem for p in DATA_DIR.glob("*.js") if p.stem != "index")
     # The 2D viewer only probes notes listed here, avoiding missing-file console errors.
     noted = sorted(p.stem for p in (DATA_DIR.parent / "notes").glob("*.js"))
-    (DATA_DIR / "index.js").write_text(f"window.REPLAY_INDEX = {json.dumps(names)};\n"
-                                       f"window.REPLAY_NOTED = {json.dumps(noted)};\n", encoding="utf-8")
+    atomic_write_text(DATA_DIR / "index.js", f"window.REPLAY_INDEX = {json.dumps(names)};\n"
+                      f"window.REPLAY_NOTED = {json.dumps(noted)};\n")
 
 
-def convert(rlog: Path, rec_path: Path) -> Path:
+def convert(rlog: Path, rec_path: Path, publish: bool = True) -> Path:
     """Build viewer/data/<rlog stem>.js from a recorder log and its replay; returns the output path."""
     rep = recfile.load(rec_path)
     log = parse_rlog(rlog)
@@ -715,6 +752,7 @@ def convert(rlog: Path, rec_path: Path) -> Path:
             "id": e.id, "owner": e.owner, "bp": e.bp, "cat": classify(e.bp, e.building), "maxhp": e.maxhp,
             "squad": e.squad, "spans": e.spans, "killed": e.killed, "killer": e.killer,
             "value": round(values[e.id]), "track": flat_track(e),
+            "cost": entity_cost(e, log.costs),
             "owners": e.owners if len(e.owners) > 1 else None,
             "vision": e.vision or None,
         } for e in log.ents],
@@ -743,23 +781,49 @@ def convert(rlog: Path, rec_path: Path) -> Path:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     out = DATA_DIR / f"{rlog.stem}.js"
     payload = json.dumps(data, separators=(",", ":"), ensure_ascii=False)
-    out.write_text(f"(window.REPLAY_DATA = window.REPLAY_DATA || {{}})[{json.dumps(rlog.stem)}] = {payload};\n",
-                   encoding="utf-8")
-    write_index()
+    atomic_write_text(out, f"(window.REPLAY_DATA = window.REPLAY_DATA || {{}})[{json.dumps(rlog.stem)}] = {payload};\n")
+    if publish:
+        write_index()
 
     print(f"{len(log.ents)} entities, {len(log.gaia)} map objects, {len(log.attacks)} attack samples, "
           f"{len(kills)} kills, {len(data['fights'])} fights, {len(log.costs)} costs, "
           f"{unknown_executers} upgrades dropped (unknown executer), "
           f"{len(log.errors)} recorder errors -> {out} ({out.stat().st_size // 1024} KB)")
-    print(trends.update())
+    if publish:
+        print(trends.update())
     return out
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("rlog")
+    ap.add_argument("rlog", nargs="?")
+    ap.add_argument("--all", action="store_true", help="reconvert all recordings and publish the catalogs once")
     ap.add_argument("rec", nargs="?", help="replay file (default: the game's playback/<name>.rec)")
     args = ap.parse_args()
+    if args.all:
+        if args.rlog or args.rec:
+            ap.error("--all does not take replay paths")
+        from record_replay import PLAYBACK_DIR
+        replays = {}
+        for folder in (ROOT / "replays", PLAYBACK_DIR):
+            for path in sorted(folder.rglob("*.rec")):
+                replays.setdefault(path.stem, path)
+        skipped = converted = 0
+        for path in sorted((ROOT / "recordings").glob("*.rlog")):
+            rec_path = replays.get(path.stem)
+            if rec_path is None:
+                print(f"{path.name}: skipped (no .rec)")
+                skipped += 1
+                continue
+            print(f"{path.name}: converting {rec_path}")
+            convert(path, rec_path, publish=False)
+            converted += 1
+        write_index()
+        print(trends.update())
+        print(f"Converted {converted}; skipped {skipped} (no .rec)")
+        return
+    if not args.rlog:
+        ap.error("provide an rlog or --all")
     rlog = Path(args.rlog)
     if args.rec:
         rec_path = Path(args.rec)

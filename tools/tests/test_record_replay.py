@@ -1,6 +1,7 @@
 import ctypes
 import importlib.util
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -45,6 +46,55 @@ class RecordReplayTests(unittest.TestCase):
     def test_exact_tolerance_boundary(self):
         self.assertTrue(self.recorder.reached_end(98.875, 100.0))
         self.assertFalse(self.recorder.reached_end(98.874, 100.0))
+
+    def test_scarlog_rejects_shrink(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'scarlog.txt'
+            path.write_bytes(b'first line\nsecond line\n')
+            log = self.recorder.ScarLog(path)
+            self.assertEqual(log.poll(), ['first line', 'second line'])
+            path.write_bytes(b'short\n')
+            with self.assertRaisesRegex(self.recorder.RecordError, 'scarlog rotated'):
+                log.poll()
+
+    def test_scarlog_rejects_replacement(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'scarlog.txt'
+            path.write_bytes(b'first\n')
+            log = self.recorder.ScarLog(path)
+            log.poll()
+            replacement = Path(temp) / 'replacement.txt'
+            replacement.write_bytes(b'longer replacement\n')
+            replacement.replace(path)
+            with self.assertRaisesRegex(self.recorder.RecordError, 'scarlog rotated'):
+                log.poll()
+
+    def test_completion_rejects_interior_errors_and_gaps(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'test.rlog'
+            header = 'HDR|5|1|100|100|2\n'
+            for records, expected in [
+                ('T|1\nT|1.5\nT|2\n', True),
+                ('T|1\nERR|sample|failure\nT|1.5\nT|2\n', False),
+                ('T|1\nT|2.5\n', False),
+                ('T|1\nT|2\n', True),
+                ('T|2\nT|1.5\nT|2\n', False),
+            ]:
+                with self.subTest(records=records):
+                    path.write_text(header + records, encoding='utf-8')
+                    self.assertEqual(self.recorder.is_complete(path, 3), expected)
+
+    def test_close_game_leaves_unknown_and_reused_pids_alone(self):
+        process = Mock()
+        process.create_time.return_value = 20
+        with patch.object(self.recorder.psutil, 'Process', return_value=process) as factory:
+            self.recorder.close_game(None)
+            factory.assert_not_called()
+            self.recorder.close_game((123, 10))
+            process.kill.assert_not_called()
+            self.recorder.close_game((123, 20))
+            process.kill.assert_called_once()
+            process.wait.assert_called_once_with(timeout=60)
 
 
 if __name__ == '__main__':

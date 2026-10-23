@@ -330,7 +330,10 @@
     const dmg = [];
     for (const e of ents) {
       if (e.cat === "livestock" || e.cat === "attachment" || e.cat === "other") continue;
-      for (let i = 1; i < e.hp.length; i++) { const dd = e.hp[i - 1] - e.hp[i]; if (dd >= 1) dmg.push([e.t[i], e.id, dd]); }
+      for (let i = 1; i < e.hp.length; i++) {
+        if (!sameSpan(e, e.t[i - 1], e.t[i])) continue;
+        const dd = e.hp[i - 1] - e.hp[i]; if (dd >= 1) dmg.push([e.t[i], e.id, dd]);
+      }
     }
     dmg.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
     buildBlows(C, per, dmg);
@@ -604,6 +607,32 @@
     C.shotT = Float64Array.from(shots, (m) => m.t0);
   }
 
+  // No observed HP delta can bridge disappearance, including a sample at re-entry.
+  function sameSpan(e, a, b) {
+    for (let i = 0; i < e.spans.length; i += 2) if (a >= e.spans[i] && a < e.spans[i + 1] && b <= e.spans[i + 1] && (i + 2 >= e.spans.length || b < e.spans[i + 2])) return true;
+    return false;
+  }
+  /** Shared viewer/analyser weights, resolved at the damage event's time. */
+  F.damageWeights = function (C, k) {
+    const v = C.byId.get(C.dmgId[k]), t = C.dmgT[k], sb = F.statsAt(C, v, t), tst = sb?.st ?? F.statOf(v.bp);
+    let blows = C.dmgSrc[k];
+    if (!blows) {
+      const drop = C.dmgDrop[k], who = new Set();
+      for (let i = idxAt(C.atkT, drop); i >= 0 && C.atkT[i] > drop - 1; i--) {
+        const p = C.atkP[i];
+        for (let j = 1; j < p.length; j += 2) if (p[j] === v.id) who.add(p[j - 1]);
+      }
+      blows = [...who].map((id) => C.byId.get(id)).filter(Boolean).map((a) => {
+        const w = timingOf(bpAt(a, t)).main;
+        return { a, dtype: w ? DTYPE[w.damage] || "melee" : "melee" };
+      });
+    }
+    return blows.map((bl) => {
+      const sa = F.statsAt(C, bl.a, t), w = weaponOf(sa?.st ?? F.statOf(bl.a.bp), bl.dtype);
+      return { bl, x: hitDamage(w, tst, sa, sb), bonus: bonusOf(w, tst) > 0 };
+    });
+  };
+
   /** Damage types and attacker shares of each drop (C.dmgType, C.dmgBonus, C.dealt: attacker id → { t: [], v: [] }). */
   function typeDamage(C) {
     const n = C.dmgT.length;
@@ -612,27 +641,10 @@
     C.dealt = new Map();
     const credit = (id, t, v) => { let r = C.dealt.get(id); if (!r) C.dealt.set(id, (r = { t: [], v: [] })); r.t.push(t); r.v.push(v); };
     for (let k = 0; k < n; k++) {
-      const v = C.byId.get(C.dmgId[k]), tst = F.statOf(v.bp), t = C.dmgT[k], amt = C.dmgAmt[k];
-      let blows = C.dmgSrc[k];
-      if (!blows) {
-        // nothing timed explains it: the units flagged on the victim in its window, each a plain hit of its weapon
-        const drop = C.dmgDrop[k], who = [];
-        for (let i = idxAt(C.atkT, drop); i >= 0 && C.atkT[i] > drop - 1; i--) {
-          const p = C.atkP[i];
-          for (let j = 1; j < p.length; j += 2) if (p[j] === v.id && !who.includes(p[j - 1])) who.push(p[j - 1]);
-        }
-        blows = who.map((id) => C.byId.get(id)).filter(Boolean).map((a) => {
-          const w = timingOf(a.bp).main;
-          return { a, dtype: w ? DTYPE[w.damage] || "melee" : "melee" };
-        });
-      }
-      if (!blows.length) { C.dmgType[k] = "other"; continue; }
-      let best = 0, total = 0;
-      const ws = blows.map((bl) => {
-        const w = weaponOf(F.statOf(bl.a.bp), bl.dtype), x = hitDamage(w, tst, null, null), bonus = bonusOf(w, tst) > 0;
-        total += x;
-        return { bl, x, bonus };
-      });
+      const t = C.dmgT[k], amt = C.dmgAmt[k], ws = F.damageWeights(C, k);
+      if (!ws.length) { C.dmgType[k] = "other"; continue; }
+      let best = 0;
+      const total = ws.reduce((sum, r) => sum + r.x, 0);
       for (const r of ws) {
         credit(r.bl.a.id, t, (amt * r.x) / total);
         if (r.x > best) { best = r.x; C.dmgType[k] = r.bl.dtype; C.dmgBonus[k] = r.bonus ? 1 : 0; }
@@ -646,7 +658,7 @@
     const rises = [];
     for (const e of ents) {
       if (!isUnit(e) || e.cat === "livestock" || e.cat === "other") continue;
-      for (let i = 1; i < e.hp.length; i++) if (e.hp[i] > e.hp[i - 1]) rises.push([e.t[i], e, e.hp[i] - e.hp[i - 1]]);
+      for (let i = 1; i < e.hp.length; i++) if (sameSpan(e, e.t[i - 1], e.t[i]) && e.hp[i] > e.hp[i - 1]) rises.push([e.t[i], e, e.hp[i] - e.hp[i - 1]]);
     }
     rises.sort((a, b) => a[0] - b[0] || a[1].id - b[1].id);
     for (const [t, e, amt] of rises) {
@@ -714,8 +726,9 @@
    * (weapon range + bodies + REACH_SLACK), 1 when B is the best. A unit target is weighed against units only.
    */
   function efficiency(C, a, b, t) {
-    const w = timingOf(a.e.bp).main, reach = ((w && w.range) || 1.2) + REACH_SLACK;
     const sb = prioScore(C, a, b, t), bb = isBld(b.e);
+    const w = timingOf(a.stats ? a.stats.bp : a.e.bp).main;
+    const reach = (a.stats?.range > 0 ? a.stats.range * 4 : ((w && w.range) || 1.2)) + REACH_SLACK;
     let best = sb;
     const cx = Math.floor(a.px / GRID), cz = Math.floor(a.pz / GRID), rc = Math.ceil((reach + 10) / GRID);
     for (let i = cx - rc; i <= cx + rc; i++) for (let j = cz - rc; j <= cz + rc; j++) {
@@ -747,6 +760,16 @@
   F.gradeOf = (eff) => (eff >= PRIO_GOOD ? "good" : eff >= PRIO_OK ? "ok" : "bad");
   F.letter = (p) => (p == null ? null : p >= 0.9 ? "S" : p >= 0.75 ? "A" : p >= 0.6 ? "B" : p >= 0.45 ? "C" : "F");
 
+  function unionIntervals(rows) {
+    rows.sort((a, b) => a[0] - b[0]);
+    const merged = [];
+    for (const row of rows) {
+      const last = merged[merged.length - 1];
+      if (last && row[0] <= last[1]) last[1] = Math.max(last[1], row[1]);
+      else merged.push(row);
+    }
+    return merged;
+  }
   /**
    * Telemetry of e up to t: { dealt, taken, kills, uptime (0–1: time flagged attacking over time spent inside fight
    * zones, null when never in one), prio (mean grade of its attack samples, null without), grade (S/A/B/C/F) }.
@@ -755,7 +778,7 @@
   F.telemetry = function (C, e, t) {
     let T = C.telemetry.get(e.id);
     if (!T) {
-      T = { atkT: [], eff: [], zones: [] };
+      T = { atkT: [], eff: [], zones: [], attacks: [] };
       const list = C.per.get(e.id) || [];
       for (let k = 0; k < list.length; k += 2) {
         const i = idxAt(C.atkT, list[k]), p = C.atkP[i], g = F.effAt(C, i);
@@ -765,14 +788,16 @@
           break;
         }
       }
-      // time inside fight zones (1.5 × the fight radius, the fights' own pairing reach) while alive
-      for (const f of C.fights) {
-        const s = Math.max(f.start, e.spans[0]), en = Math.min(f.end, e.spans[e.spans.length - 1]);
-        if (en <= s) continue;
-        let inside = 0;
-        for (let ts = s; ts < en; ts += SAMPLE) { if (!alive(e, ts)) continue; const L = locate(e, ts); if (Math.hypot(L.x - f.x, L.z - f.z) <= f.radius * 1.5) inside++; }
-        if (inside) T.zones.push([s, en, inside * SAMPLE]);
+      // Half-open observed occupancy, clipped to alive spans; overlapping fights count once.
+      for (const f of C.fights) for (let k = 0; k < e.spans.length; k += 2) {
+        const s = Math.max(f.start, e.spans[k]), en = Math.min(f.end, e.spans[k + 1]);
+        for (let ts = s; ts < en; ts += SAMPLE) {
+          const L = locate(e, ts);
+          if (Math.hypot(L.x - f.x, L.z - f.z) <= f.radius * 1.5) T.zones.push([ts, Math.min(en, ts + SAMPLE)]);
+        }
       }
+      T.zones = unionIntervals(T.zones);
+      T.attacks = unionIntervals(T.atkT.map((ts) => [ts - SAMPLE, ts]));
       C.telemetry.set(e.id, T);
     }
     const r = C.dealt.get(e.id);
@@ -784,9 +809,17 @@
     let kills = 0;
     for (const k of C.kills) { if (k.t > t) break; if (k.killer === e.id) kills++; }
     let attacking = 0, prio = 0, np = 0;
-    for (let i = 0; i < T.atkT.length && T.atkT[i] <= t; i++) { attacking += SAMPLE; prio += T.eff[i]; np++; }
-    let zone = 0;
-    for (const [s, en, secs] of T.zones) if (s <= t) zone += t >= en ? secs : (secs * (t - s)) / (en - s);
+    for (let i = 0; i < T.atkT.length && T.atkT[i] <= t; i++) { prio += T.eff[i]; np++; }
+    let zone = 0, ai = 0;
+    for (const [s, end] of T.zones) {
+      const en = Math.min(end, t);
+      if (en <= s) break;
+      zone += en - s;
+      while (ai < T.attacks.length && T.attacks[ai][1] <= s) ai++;
+      for (let j = ai; j < T.attacks.length && T.attacks[j][0] < en; j++) {
+        attacking += Math.max(0, Math.min(en, T.attacks[j][1]) - Math.max(s, T.attacks[j][0]));
+      }
+    }
     const p = np ? prio / np : null;
     return { dealt, taken, kills, uptime: zone > 0 ? Math.min(1, attacking / zone) : null, prio: p, grade: F.letter(p) };
   };

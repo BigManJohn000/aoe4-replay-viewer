@@ -25,6 +25,10 @@
     selected: null, group: null, hover: null, follow: false, fight: null, dirty: true, mouse: null,
   };
   let M, map, tl, caster;
+  let anchorWall = performance.now(), anchorT = S.t;
+  const reanchor = (now = performance.now()) => { anchorWall = now; anchorT = S.t; S.dirty = true; };
+  const clockTime = now => Math.min(M.duration, anchorT + (now - anchorWall) / 1000 * SPEEDS[S.speedIdx]);
+  document.addEventListener("visibilitychange", () => reanchor());
 
   const DEFAULT_REPLAY = "aoe4_245598603"; // opened when the link names no recording (the showcase match)
 
@@ -74,6 +78,7 @@
     M = RV.prepare(d);
     S.viewMask = M.allMask;
     S.t = d.recordStart;
+    reanchor();
     buildHeader();
     caster = RV_CASTER.create($("#casterHud"), M);
     map = new RV.MapView($("#map"), M, S);
@@ -103,6 +108,7 @@
   // ---------- state actions ----------
   S.seek = t => {
     S.t = Math.max(0, Math.min(M.duration, t));
+    reanchor();
     S.dirty = true;
   };
   // One unit or building (click), or clear with null; either ends a highlight.
@@ -147,6 +153,7 @@
     map.focus(f.x, f.z, f.radius);
     S.speedIdx = SPEEDS.indexOf(1);
     S.playing = true;
+    reanchor();
     S.follow = false;
     switchTab("fights");
     renderFightDetail();
@@ -273,6 +280,14 @@
     $("#fightSort").onchange = buildFightList;
     bindOptionMenus();
     bindCompass();
+    $("#sidebarToggle").onclick = () => {
+      const open = document.body.classList.toggle("side-open");
+      $("#sidebarToggle").setAttribute("aria-expanded", String(open));
+    };
+    $("#hudDetails").onclick = () => {
+      const open = document.body.classList.toggle("hud-details");
+      $("#hudDetails").setAttribute("aria-expanded", String(open));
+    };
     for (const b of document.querySelectorAll(".tabs button")) b.onclick = () => switchTab(b.dataset.tab);
     window.addEventListener("keydown", ev => {
       if (ev.key !== "Escape" && ev.target.closest("button, input, select, textarea, [contenteditable]")) return;
@@ -356,12 +371,16 @@
   }
 
   function togglePlay() {
+    if (S.playing) S.t = clockTime(performance.now());
     if (S.t >= M.duration) S.t = M.d.recordStart;
     S.playing = !S.playing;
+    reanchor();
   }
 
   function setSpeed(i) {
+    if (S.playing) S.t = clockTime(performance.now());
     S.speedIdx = Math.max(0, Math.min(SPEEDS.length - 1, i));
+    reanchor();
   }
 
   function jumpFight(dir) {
@@ -374,6 +393,10 @@
   }
 
   function switchTab(name) {
+    if (matchMedia("(max-width: 1100px)").matches) {
+      document.body.classList.add("side-open");
+      $("#sidebarToggle").setAttribute("aria-expanded", "true");
+    }
     for (const b of document.querySelectorAll(".tabs button")) b.classList.toggle("active", b.dataset.tab === name);
     for (const s of document.querySelectorAll("#side section")) s.hidden = s.id !== "tab-" + name;
     if (name === "players") renderPlayers();
@@ -467,6 +490,7 @@
     else if (f) map.focus(f.x, f.z, f.radius);
     S.speedIdx = Math.max(0, SPEEDS.indexOf(m.speed || 1));
     S.playing = true;
+    reanchor();
     renderFightDetail();
     highlightFightList();
     if (m.tab) switchTab(m.tab); // e.g. "fights" shows the inspector, "players" the tech table
@@ -910,12 +934,10 @@
   }
 
   // ---------- main loop ----------
-  let last = performance.now(), lastPanel = 0;
+  let lastPanel = 0;
   function frame(now) {
-    const dt = Math.min(0.1, (now - last) / 1000);
-    last = now;
     if (S.playing) {
-      S.t = Math.min(M.duration, S.t + dt * SPEEDS[S.speedIdx]);
+      S.t = clockTime(now);
       if (S.t >= M.duration) S.playing = false;
       S.dirty = true;
     }

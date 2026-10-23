@@ -29,6 +29,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 
 import fetch_replays  # noqa: E402  (unpack, REPLAY_URL)
+from atomicio import atomic_write_text  # noqa: E402
 
 DB = ROOT / "harvest" / "aoe4.db"
 LOG = ROOT / "harvest" / "harvest.log"
@@ -50,6 +51,9 @@ create table if not exists players (
   profile_id integer primary key, name text, rating integer, source text, listed_at text, games_seen integer);
 create table if not exists summaries (game_id integer primary key, fetched_at text, status integer, body blob);
 create table if not exists replays (game_id integer primary key, path text, status integer, build integer, fetched_at text);
+create index if not exists summaries_status on summaries(status, game_id);
+create index if not exists replays_status on replays(status, game_id);
+create index if not exists games_elig on games(patch, started_at);
 """
 
 _last = 0.0
@@ -228,21 +232,34 @@ def cmd_replays(con: sqlite3.Connection, a: argparse.Namespace) -> None:
         f"order by (g.p0 = {MAY} or g.p1 = {MAY}) desc, (g.p0_mmr + g.p1_mmr) desc limit ?", (a.count,)).fetchall()
     REPLAYS.mkdir(parents=True, exist_ok=True)
     for n, (gid, pid) in enumerate(rows, 1):
-        path = REPLAYS / f"aoe4_{gid}.rec"
-        status_code = 200
-        try:
-            path.write_bytes(fetch_replays.unpack(get(fetch_replays.REPLAY_URL.format(gid=gid, pid=pid), a.pause)))
-            body = con.execute("select body from summaries where game_id = ?", (gid,)).fetchone()[0]
-            path.with_suffix(".summary.json").write_bytes(zlib.decompress(body))
-        except urllib.error.HTTPError as e:
-            status_code = e.code
-        except RuntimeError:
-            status_code = -1
-        con.execute("insert or replace into replays values (?,?,?,?,?)",
-                    (gid, str(path.relative_to(ROOT)) if status_code == 200 else None, status_code, None,
-                     dt.datetime.now().isoformat(timespec="seconds")))
-        con.commit()
-        log(f"replays: {n}/{len(rows)} game {gid}: HTTP {status_code}")
+        status_code = download_replay(con, gid, pid, a.pause)
+        log(f"replays: {n}/{len(rows)} game {gid}: status {status_code}")
+
+
+def download_replay(con: sqlite3.Connection, gid: int, pid: int, pause: float) -> int:
+    """Fetch one replay through the validated publication path and commit its retryable status."""
+    REPLAYS.mkdir(parents=True, exist_ok=True)
+    path = REPLAYS / f"aoe4_{gid}.rec"
+    status_code, build = 200, None
+    try:
+        fetch_replays.existing_replay(path)  # quarantine an invalid older download before replacing it
+        replay = fetch_replays.publish_replay(path, get(fetch_replays.REPLAY_URL.format(gid=gid, pid=pid), pause))
+        build = replay.version
+        row = con.execute("select body from summaries where game_id = ?", (gid,)).fetchone()
+        if row and row[0]:
+            atomic_write_text(path.with_suffix(".summary.json"), zlib.decompress(row[0]).decode("utf-8"))
+    except fetch_replays.InvalidReplay as e:
+        status_code = -2
+        log(f"replays: game {gid}: {e}")
+    except urllib.error.HTTPError as e:
+        status_code = e.code
+    except (RuntimeError, urllib.error.URLError, TimeoutError, ConnectionError):
+        status_code = -1
+    con.execute("insert or replace into replays values (?,?,?,?,?)",
+                (gid, str(path.relative_to(ROOT)) if status_code == 200 else None, status_code, build,
+                 dt.datetime.now().isoformat(timespec="seconds")))
+    con.commit()
+    return status_code
 
 
 def status(con: sqlite3.Connection, a: argparse.Namespace) -> None:

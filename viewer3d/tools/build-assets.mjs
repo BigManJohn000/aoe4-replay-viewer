@@ -1980,7 +1980,18 @@ function checkMissing() {
   console.log(JSON.stringify({ replay: name, total: targets.size, missing }));
 }
 
+/** Every base, overlay and job mapping must name a baked animation archetype. */
+function validateAnimations(index) {
+  for (const [bp, entry] of Object.entries(index.blueprints)) {
+    for (const name of [entry.base, ...(entry.extra ?? []), ...Object.values(entry.jobs ?? {})]) {
+      if (!Object.hasOwn(index.archetypes, name)) throw new Error(`Dangling animation archetype: ${bp} -> ${name}`);
+    }
+  }
+}
+
 async function main() {
+  const animations = readBuilt(path.join(CFG.out, 'anims/index.json'));
+  if (animations) validateAnimations(animations);
   if (flag('--check')) return checkMissing();
   requireToolchain();
   const t0 = Date.now();

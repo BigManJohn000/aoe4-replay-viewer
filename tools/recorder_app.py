@@ -50,6 +50,8 @@ import convert  # noqa: E402
 import fetch_replays  # noqa: E402
 import recfile  # noqa: E402
 import record_replay as rr  # noqa: E402
+import runlock  # noqa: E402
+from atomicio import atomic_write_text  # noqa: E402
 
 PORT = 47811
 PAGE = ROOT / "tools" / "recorder_app.html"
@@ -297,9 +299,7 @@ class App:
                 "replays_dir": portable(self.replays_dir),
                 "toolchain_dir": portable(self.toolchain) if self.toolchain else None,
                 "items": [{**it, "file": portable(it["file"])} if it.get("file") else it for it in self.items]}
-        tmp = STATE_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, indent=1, ensure_ascii=False), encoding="utf-8")
-        tmp.replace(STATE_FILE)
+        atomic_write_text(STATE_FILE, json.dumps(data, indent=1, ensure_ascii=False))
 
     @staticmethod
     def summary_path(it: dict) -> Path:
@@ -308,7 +308,7 @@ class App:
     @staticmethod
     def is_done(it: dict) -> bool:
         return (bool(it.get("seconds")) and rr.is_complete(ROOT / "recordings" / f"{it['stem']}.rlog", it["seconds"])
-                and (convert.DATA_DIR / f"{it['stem']}.js").exists())
+                and convert.payload_valid(convert.DATA_DIR / f"{it['stem']}.js"))
 
     def is_waiting(self, it: dict) -> bool:
         return (bool(it.get("file")) and not it.get("error") and it["stem"] not in self.done
@@ -402,16 +402,15 @@ class App:
                 if not any(i is it for i in self.items):  # cleared from the list while waiting for its turn
                     continue
             path = Path(it["file"]) if it.get("file") else self.replays_dir / f"{it['stem']}.rec"
-            fresh = not path.exists()
+            rep = fetch_replays.existing_replay(path)
+            fresh = rep is None
             error = None
             try:
                 if fresh:
                     url = fetch_replays.REPLAY_URL.format(gid=it["game_id"], pid=it["profile_id"])
-                    data = fetch_replays.unpack(fetch_replays.fetch(url))
                     path.parent.mkdir(parents=True, exist_ok=True)
-                    path.write_bytes(data)
+                    rep = fetch_replays.publish_replay(path, fetch_replays.fetch(url))
                     time.sleep(fetch_replays.PAUSE)
-                rep = recfile.load(path)
             except urllib.error.HTTPError as e:
                 error = ("No replay on the server for this match (it is too old, or the player does not share match "
                          "history)" if e.code == 404 else f"Download failed (HTTP {e.code})")
@@ -448,7 +447,7 @@ class App:
             data = fetch_replays.fetch(SUMMARY_URL.format(gid=it["game_id"], pid=it["profile_id"]))
             json.loads(data)  # an error page is not a summary
             dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_bytes(data)
+            atomic_write_text(dest, data.decode("utf-8"))
             time.sleep(fetch_replays.PAUSE)
             return None
         except urllib.error.HTTPError as e:
@@ -458,6 +457,9 @@ class App:
 
     def blocker(self) -> str:
         """Why recording cannot start right now, or ""."""
+        holders = runlock.active("recording")
+        if holders:
+            return f"Another controller is using the game (PIDs: {holders})."
         if self.watching():
             return ("Opening a replay in the game for the viewer. Close the game afterwards and recording starts by "
                     "itself.")
@@ -511,8 +513,12 @@ class App:
                                          env={**os.environ, "PYTHONIOENCODING": "utf-8"})
         print(f"[{it['stem']}] recording {it['title']}")
         last = ""
+        identity = None
         for line in self.proc.stdout:  # text mode turns the progress line's \r into line breaks
             line = line.strip()
+            match = re.fullmatch(r"Game process: (\d+)\|([\d.]+)", line)
+            if match:
+                identity = (int(match[1]), float(match[2]))
             if line:
                 last = line
                 self.progress(it, line)
@@ -522,7 +528,7 @@ class App:
             self.proc = self.current = None
             self.stopping = False
         if stopped:
-            rr.close_game()
+            rr.close_game(identity)
             print(f"[{it['stem']}] stopped")
             return None
         if self.is_done(it):
@@ -678,6 +684,14 @@ class App:
         return {"ok": True}
 
     def run_watch(self, src: Path, at: float, x: float, z: float, game: dict | None, now: float | None) -> None:
+        try:
+            with runlock.hold("recording"):
+                self._run_watch(src, at, x, z, game, now)
+        except runlock.LockError as e:
+            self.watch_text(str(e), "error")
+            self.wake.set()
+
+    def _run_watch(self, src: Path, at: float, x: float, z: float, game: dict | None, now: float | None) -> None:
         """game/now: the open game to fast-forward in place (its console already open) and its replay time."""
         try:
             if game is not None:
@@ -732,7 +746,8 @@ class App:
         """(Re)start the game on src's replay; returns its log and its open console."""
         if ai.game_pid() is not None:
             self.watch_text("Closing Age of Empires IV...")
-            rr.close_game()
+            # Watch's explicit restart confirmation attaches to this one process, never all game processes.
+            rr.close_game(rr.game_identity(ai.game_pid()))
             self.watch_text("Starting Age of Empires IV...")
         name = rr.stage_replay(src)
         started = time.time()
@@ -744,7 +759,7 @@ class App:
         hwnd = ai.game_window()
         if hwnd is None:
             raise WatchError("The game window was not found.")
-        time.sleep(2)
+        # Console.open polls the ACK protocol; no fixed post-mission delay is needed.
         self.watch_text("Getting the game ready... (if this takes long, click into the game window once)")
         console = rr.Console(log, hwnd)
         console.open(probe_first=False)  # a probe would type into the replay's controls

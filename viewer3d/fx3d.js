@@ -135,6 +135,7 @@ export class CombatFx3D {
     this.side = new THREE.Vector3(); this.tmp = new THREE.Vector3();
     this.mz = new THREE.Color();
     this.hs = new Float32Array(260); this.cs = new Float32Array(260); this.sn = new Float32Array(260);
+    this.hsIn = new Float32Array(260);
     this.seenTargets = new Set(); this.seenHealers = new Set();
   }
 
@@ -158,18 +159,19 @@ export class CombatFx3D {
   /** Terrain-following ring (replay x, z), w m wide inward from radius r; dashed: two segments on, two off. */
   ring(batch, cx, cz, r, w, c, a, dashed = false, segs = Math.max(32, Math.min(128, Math.round(r * 6)))) {
     if (!(r > 0.02) || !batch.room(segs)) return;
-    const r0 = Math.max(0, r - w), { hs, cs, sn, heightAt } = this, uv = this.atlas.solid, u = (uv.u0 + uv.u1) / 2, v = (uv.v0 + uv.v1) / 2;
+    const r0 = Math.max(0, r - w), { hs, hsIn, cs, sn, heightAt } = this, uv = this.atlas.solid, u = (uv.u0 + uv.u1) / 2, v = (uv.v0 + uv.v1) / 2;
     for (let i = 0; i <= segs; i++) {
       const ang = (i / segs) * TAU, co = Math.cos(ang), si = Math.sin(ang);
       cs[i] = co; sn[i] = si;
       hs[i] = heightAt(cx + co * r, cz + si * r) + LIFT;
+      hsIn[i] = heightAt(cx + co * r0, cz + si * r0) + LIFT;
     }
     for (let i = 0; i < segs; i++) {
       if (dashed && (i & 3) >= 2) continue;
       const j = i + 1;
-      batch.vert(cx + cs[i] * r0, hs[i], -(cz + sn[i] * r0), u, v, c.r, c.g, c.b, a);
+      batch.vert(cx + cs[i] * r0, hsIn[i], -(cz + sn[i] * r0), u, v, c.r, c.g, c.b, a);
       batch.vert(cx + cs[i] * r, hs[i], -(cz + sn[i] * r), u, v, c.r, c.g, c.b, a);
-      batch.vert(cx + cs[j] * r0, hs[j], -(cz + sn[j] * r0), u, v, c.r, c.g, c.b, a);
+      batch.vert(cx + cs[j] * r0, hsIn[j], -(cz + sn[j] * r0), u, v, c.r, c.g, c.b, a);
       batch.vert(cx + cs[j] * r, hs[j], -(cz + sn[j] * r), u, v, c.r, c.g, c.b, a);
     }
   }

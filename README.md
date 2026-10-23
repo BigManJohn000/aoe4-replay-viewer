@@ -79,13 +79,33 @@ The list is kept in `recorder_app.json`, so closing the window and starting agai
 python\python.exe tools\record_replay.py path\to\replay.rec   # record one replay (or a folder of them)
 python\python.exe tools\record_replay.py                      # your last match (the game's playback\temp.rec)
 python\python.exe tools\convert.py recordings\<name>.rlog <replay.rec>   # re-convert a recording
+python\python.exe tools\convert.py --all                      # all recordings with a matching .rec; publish catalogs once
 python\python.exe tools\trends.py                             # rebuild viewer/data/trends/games.js
 ```
 
-`Record replays.bat` records everything under `replays/` that has no complete recording yet. A recording counts as
-complete when its last sample is within 1.125 s of the replay's end (complete recordings end up to 1.0 s early); an
-incomplete one is kept but not converted, and retried on the next run. The output is `recordings/<name>.rlog` (raw
-records) and `viewer/data/<name>.js` (viewer data, listed in `viewer/data/index.js`, written by `convert.write_index()`).
+`Record replays.bat` records everything under `replays/` that has no complete recording yet. Complete means the
+recording has a header, its last sample is within 1.125 s of the replay's end, no recorder errors, and no heartbeat
+gap longer than twice the 0.5 s sampling interval. Incomplete captures are kept but not converted and retried next
+run. GUI **Done** and batch skipping additionally require a valid JSON viewer payload, not merely an existing file.
+The `.rlog`, viewer payload, index and recorder state/summary outputs are published by same-directory temporary
+write, flush/fsync and atomic replacement. Batch recording reconverts a valid complete rlog with a missing or damaged
+payload without replaying the game. Batch conversion refreshes the index and trends once; `convert.py --all` finds `.rec`
+files recursively under `replays/`, then the game's playback folder, and reports recordings without a matching replay.
+
+Controllers exclusively lock recording before staging or launching. Shutdown kills only the launched/explicitly
+attached PID after checking its process creation time; an unknown or reused PID is left untouched. The console's
+ACK handshake replaces the fixed post-mission delay, and recorder READY echoes a controller nonce. Scarlog
+replacement or shrink aborts the capture. The exported `recordStart` still reports the actual first observed time.
+
+Recorder v5 adds sample timestamps to cost quotes and invalidates a player's quote cache after upgrades; entity
+`cost` is the food/wood/gold/stone quote in effect at its first birth, divided by observed squad size and rounded to
+0.1 (`null` when unknown). Old v4 recordings retain their timeless quote semantics. No evidenced nominal-squad-size
+API was found, so the recorder still uses `Squad_Count`; partially spawned squads remain a known pricing limitation.
+Sample failures reset entity/destination/quote caches, and repeated live `N` records resynchronize existing entities.
+
+Replay downloads are parsed before atomic publication, with the replay build stored in the catalog. Invalid
+responses are quarantined as `.rec.bad` and marked retryable (`status = -2`); invalid existing downloads are fetched
+again. Harvest schema initialization installs indexes on summary/replay status and game patch/start time.
 
 ## Using the viewers
 
@@ -119,10 +139,20 @@ records) and `viewer/data/<name>.js` (viewer data, listed in `viewer/data/index.
 Links can name a match and a time: `index.html#aoe4_245598603/t1280` opens 21:20.
 In 2D, resizing the map or toggling the caster dock preserves camera framing, including moment-link focus.
 Focused controls keep their native keyboard actions (Space opens Combat/Layers instead of toggling playback).
+Below 1100 px, the 2D player strips stack, **HUD details** expands resource/research columns, and **Panels** opens
+the sidebar as a drawer; the timeline retains its own height. Both viewers anchor playback to elapsed wall time,
+so slow frames do not slow the replay; changing tab visibility re-anchors the clock without a hidden-tab jump.
+Paused 3D skips scene updates and rendering until input, camera damping, a seek or an asset completion changes the
+view. Toast fades and other CSS/timer-driven HUD effects still run, and seeking clears under-attack notices.
+The 3D FPS readout uses unclamped frame intervals and includes p95 frame milliseconds.
 Portrait and description lookups share pending requests and retain failed results for the session; missing portraits
 keep the local map art. The card's healing received advances at recorded HP rises, capped at each heal session's total.
 `viewer/trends.html` compares one player's numbers across all recorded matches (age-up times, villagers at 10:00,
 army at 15:00, resources banked, fight trades); the 3D page opens it from **📊 Match Trends**.
+Trends credit killed resources only to the known killer's owner at the kill time, against hostile victims; teammates
+do not each inherit the team's kills. Trends and replay-analysis caches include payload hashes, hashes of their
+analysis sources and schema versions. Aggregates include only matches in `viewer/data/index.js` whose payloads still
+exist; a changed engine invalidates old per-match facts without a manual version bump.
 
 ## 3D models
 
@@ -148,6 +178,13 @@ them on your PC from your installed copy of Age of Empires IV:
 The game is found through Steam (set `AOE4_ARCHIVES` to its `cardinal/archives` folder if it isn't), and archives
 are unpacked into `toolchain/content-local/extracted/`. The output goes to `viewer3d/assets/`, which Git ignores.
 Once the toolchain is there, Replay Recorder builds whatever a newly recorded match is missing by itself.
+Asset builds reject animation mappings that reference absent archetypes. Failed model loads use procedural stand-ins,
+including age-up swaps, and player vision also works without an asset catalog. GLB geometry is de-interleaved once
+before cloning. The 3D viewer releases completed GLB parser caches and raw entity tracks/vision after both models
+have copied them; economy analysis retains the other payload fields and is cached per match.
+The loopback server revalidates static files with mtime/size ETags (unchanged files return 304), rejects malformed
+URL escapes with 400, and handles file-stream failures without terminating. It does not gzip local transfers.
+Renderer regression tests: `node --test viewer3d/tools/audit-regressions.test.mjs`.
 
 The **Graphics** setting in the 3D viewer switches between High and Low (fast) quality for weaker GPUs.
 
@@ -211,6 +248,10 @@ same events at the same moment:
 - `RV_FRAME.combat(ents, data)` builds the combat index once per recording: timed melee strikes and shots from the
   recorded attacker/target pairs and the attack timings in `stats.js`, killing blows, guessed tower and keep arrows,
   damage numbers typed by the weapon that caused them, splash hits, heals and target-priority grades.
+  Damage attribution uses each attacker's and victim's upgraded stats at the event time; target priority uses upgraded
+  reach (stat tiles × 4 metres). HP drops and healing never bridge absence/re-entry spans. Unit-card fight-zone uptime
+  intersects attack windows with the union of occupied zone intervals, clipped at the seek time; no occupancy means
+  unavailable uptime, not zero.
 - `RV_FRAME.controller(index)` is each viewer's `FrameRenderState`: `selectedUnitIds`, `hoveredUnitId`, and for a
   time *t* the `activeProjectiles`, `activeImpacts` (splash shots landed in the last 0.5 s), `activeHeals`,
   `floatingDamageEvents` and `activeEngagementLines` lists. The lists come from the recorded tracks alone, never from
@@ -232,10 +273,16 @@ from `stats.js`, so civ variants (Delhi's free but slow research) count as the p
   started earlier; otherwise the player's own age arrival plus an assumed pro offset (`RV_ECO.BENCH`).
 - Missed = Σ gatherers × (rate with − rate without) × dt from the benchmark to the actual research (to the end of the
   replay when never researched). Gatherers come from the recorded jobs; the base rate per villager is measured from
-  each player's bank and spend, because the recording has no gather rates. Net Eco Deficit = missed − cost.
+  each player's bank and spend, because the recording has no gather rates. Deficit equals missed gather for completed
+  research; only never-researched techs subtract their unspent cost. Summary-only analysis uses observed income ×
+  (multiplier − 1), since the delayed tech was not active yet. Both calibration and missed-gather integration split
+  held jobs at modifier completions. The caster's estimated income applies the same time-resolved multipliers.
+  Spend uses each entity's recorded first-birth resource quote when present, with catalogue fallback for older
+  payloads; military spend follows the shared unit categories, including warships and heroes but excluding scouts.
 - Capitalized YES needs both: the bank stayed below the cost while most of the spend went to military or defences
   (checked over at most the first 180 s of the delay), and an impact in the tempo window 90–180 s after the
-  benchmark (enemy villagers idled, kills, building damage, or a held defence). Otherwise NO (Pure Eco Deficit).
+  benchmark (enemy villagers idled, kills, building damage, or a held defence). Combat ownership is resolved at the
+  event time, including converted units/buildings. Otherwise NO (Pure Eco Deficit).
 - Wheelbarrow changes carry capacity and speed, not gather rate; it is modelled as shorter trips with an assumed
   share of walking time per resource (`RV_ECO.WALK_SHARE`).
 
@@ -267,7 +314,9 @@ its header comment carries the full method and the measurements behind each cons
 - Win probability: Lanchester square law. Each side's strength is total dps against the enemy's mix × total HP at the
   fight's start, from `stats.js` records with the upgrades researched by then. p = logistic(ln(P_A / P_B) / 1.5). The
   1.5 is fitted to the showcase match (Brier 0.198 against 0.250 for coin flips), not derived. The what-if boxes add
-  armour or attack to one side and recompute p and the expected losses.
+  armour or attack to one side and recompute p and the expected losses. Odds, winner and what-if are available only
+  for exactly two teams. Multi-team fights show per-team losses and kill totals without assigning a coalition's result
+  to one of its members.
 - Idle: army in the area that moved under 4 m and did not attack over the trailing 15 s. Late: first in the area more
   than 20 s after the start.
 - Position tags: Chokepoint (free width 3–16 m, closed on both sides), Surround/Flank (attackers outside the densest

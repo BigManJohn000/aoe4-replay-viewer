@@ -72,7 +72,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { mergeGeometries, deinterleaveGeometry } from 'three/addons/utils/BufferGeometryUtils.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -323,7 +323,26 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 
 // ═══════════════════════════════════════ 3. ASSETS ═══════════════════════════════════════
 
+let dirty = true;
+const invalidate = () => { dirty = true; };
+// Input may change hover, selection, options or layout without advancing replay time.
+for (const event of ['pointermove', 'pointerdown', 'pointerup', 'pointerleave', 'wheel', 'keydown', 'keyup', 'click', 'input', 'change', 'toggle'])
+  document.addEventListener(event, invalidate, true);
+window.addEventListener('resize', invalidate);
+THREE.DefaultLoadingManager.onProgress = invalidate;
+THREE.DefaultLoadingManager.onLoad = invalidate;
 const gltfLoader = new GLTFLoader();
+// Geometry clones otherwise de-interleave repeatedly (and warn for every attribute).
+// Do it once before any template/instance is built, including animation GLBs.
+gltfLoader.register(() => ({
+  name: 'ReplayDeinterleave',
+  afterRoot(gltf) {
+    for (const scene of gltf.scenes) scene.traverse((o) => {
+      if (o.geometry) deinterleaveGeometry(o.geometry);
+    });
+    invalidate();
+  },
+}));
 
 /**
  * Unit material: albedo plus the game's patternTex mask (TEAM_MASK_GLSL: player-colour cloth, skin). Normal,
@@ -565,9 +584,14 @@ class AssetRegistry {
     if (this.loading.has(url)) return;
     this.total++;
     const p = gltfLoader.loadAsync(url).then(
-      (g) => this.loaded.set(url, g),
+      (g) => {
+        // Templates and unit preparation only consume scene. The completed parser retains
+        // compressed buffers, texture-source promises and JSON; none is needed to instantiate.
+        g.parser = null;
+        this.loaded.set(url, g);
+      },
       (err) => { console.warn(`[assets] ${url} failed, using procedural fallback`, err); this.loaded.set(url, null); },
-    ).finally(() => { this.done++; this.onProgress?.(); });
+    ).finally(() => { this.done++; this.onProgress?.(); invalidate(); });
     this.loading.set(url, p);
   }
 
@@ -936,7 +960,7 @@ if (!await loadScript(`${SHARED}data/${encodeURIComponent(REPLAY_NAME)}.js`) || 
 }
 // built models (tools/build-assets.mjs): catalog.json fills in every built blueprint ASSET_MAP has no hand-tuned entry
 // for. Weapon timings come from the shared unit statistics (the 2D viewer's stats.js, RV_FRAME.statOf).
-const getJson = (url) => fetch(url).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+const getJson = (url) => fetch(url).then((r) => (r.ok ? r.json() : null)).catch(() => null).finally(invalidate);
 const [CATALOG, SAVED_TWEAKS] = await Promise.all([getJson('assets/catalog.json'), getJson('tweaks.json')]);
 if (!window.RV_FRAME || !window.RV_STATS || !window.RV_FX) fatal(`${SHARED}stats.js / frame.js / fx.js did not load: open the viewer through node serve.mjs`);
 for (const [bp, e] of Object.entries(CATALOG?.blueprints ?? {})) {
@@ -991,6 +1015,9 @@ function clearTweaks() {
   saveTweaks(0);
 }
 const R = new Replay(window.REPLAY_DATA[REPLAY_NAME], window.RV_UNITS, window.RV_FRAME);
+// Both prepEnt (model.js) and prepEntity (core/replay.js) copy these into typed arrays;
+// neither model aliases them. Keep all other raw fields for the shared economy engine.
+for (const e of window.REPLAY_DATA[REPLAY_NAME].entities) e.track = e.vision = null;
 // the shared FrameRenderState (frame.js): selection, hover and this frame's projectiles, heals, damage numbers and
 // engagement lines, the same lists the 2D viewer draws from
 const VIEW = window.RV_FRAME.controller(R.combat);
@@ -1007,6 +1034,10 @@ const state = {
   selected: null, hovered: null, follow: false, quality: 'high', // quality: 'high' | 'low' (applyQuality); selected: the lone selected entity (section 8)
   camPlayer: 0, // player index whose recorded camera drives the view (0: free camera)
 };
+let anchorWall = performance.now(), anchorT = state.t;
+const reanchor = (now = performance.now()) => { anchorWall = now; anchorT = state.t; invalidate(); };
+const clockTime = (now) => Math.min(R.t1, anchorT + (now - anchorWall) / 1000 * state.speed);
+document.addEventListener('visibilitychange', () => reanchor());
 const selection = new Set(); // selected entities (section 8: setSelection)
 let selVer = 0, selSynced = 0;
 
@@ -2459,7 +2490,7 @@ function unitReady(url, bp) {
     units.prepare(url, assets.loaded.get(url).scene, bp).then(
       (ok) => unitPrep.set(k, ok && clipTable(bp, ANIMS.blueprints[bp].style).idle.length > 0),
       (err) => { console.warn(`[units] ${url} (${bp}): clips failed, standing in bind pose`, err); unitPrep.set(k, false); },
-    );
+    ).finally(invalidate);
   }
   return r;
 }
@@ -3261,6 +3292,7 @@ function syncModel(e, v, t, bp = e.bp) {
     const key = `${url}|${pal}|${e.pown}`;
     if (v.key === key) return;
     const tpl = assets.template(url, pal);
+    if (tpl === false) { v.setModel(fallbackFor(e), key); return; }
     const anim = tpl ? tpl.rigged && unitReady(url, e.bp) : null;
     if (anim) { v.setUnit(url, tpl, key); return; }
     if (anim === false) { v.setModel(assets.instantiate(tpl, e.pown), key); return; }
@@ -3916,6 +3948,7 @@ controls.maxDistance = 1100;
 controls.screenSpacePanning = false;
 controls.zoomToCursor = true;
 controls.update();
+controls.addEventListener('change', invalidate); // includes every damping step, not only pointer input
 
 const keys = new Set();
 const _fwd = new THREE.Vector3(), _side = new THREE.Vector3(), _move = new THREE.Vector3(), _off = new THREE.Vector3();
@@ -4048,16 +4081,23 @@ function iconSrc(e, px) {
 
 function seek(t) {
   state.t = clamp(t, R.t0, R.t1);
+  reanchor();
+  raidToasts.clear();
+  raidToasts.last = state.t;
 }
 
 function setPlaying(p) {
+  if (state.playing) state.t = clockTime(performance.now());
   if (p && state.t >= R.t1) seek(R.t0);
   state.playing = p;
+  reanchor();
   $('play').textContent = p ? '❚❚' : '▶';
 }
 
 function setSpeed(s) {
+  if (state.playing) state.t = clockTime(performance.now());
   state.speed = s;
+  reanchor();
   $('speed').textContent = `${s}×`;
   $('slower').disabled = s <= SPEEDS[0];
   $('faster').disabled = s >= SPEEDS[SPEEDS.length - 1];
@@ -4077,6 +4117,7 @@ function setSelection(list, follow = false) {
   afterSelection(follow);
 }
 function afterSelection(follow = false) {
+  invalidate();
   selVer++;
   state.selected = selection.size === 1 ? selection.values().next().value : null;
   state.follow = !!(follow && state.selected);
@@ -4376,13 +4417,14 @@ function renderPlayers(t, fresh) {
 }
 // Upgrade timing (shared ecopanel.js over eco.js): built while the Economy tab shows its box, once per second of replay time.
 let ecoKey = null;
+let ecoAnalysis;
 function renderEco(t, force) {
   if (drawerTab !== 'eco' || !$('ecoBox').open) return;
   const key = Math.floor(t);
   if (!force && key === ecoKey) return;
   ecoKey = key;
   const d = window.REPLAY_DATA[REPLAY_NAME];
-  $('ecoCost').replaceChildren(window.RV_ECOPANEL.render(window.RV_ECO.analyze(d, R.combat), {
+  $('ecoCost').replaceChildren(window.RV_ECOPANEL.render(ecoAnalysis ??= window.RV_ECO.analyze(d, R.combat), {
     d, C: R.combat, t, seek: (tt) => seek(tt), color: playerColor,
   }));
 }
@@ -4871,6 +4913,7 @@ let hoverDirty = true, hoverT = NaN, hoverS = NaN;
 const _hoverPos = new THREE.Vector3(), _hoverQuat = new THREE.Quaternion();
 function updateHover() {
   const tip = $('tooltip');
+  const previous = state.hovered;
   if (!mouseIn) state.hovered = null;
   else if (hoverDirty || state.t !== hoverT || state.scaleNow !== hoverS || !camera.position.equals(_hoverPos)
     || !camera.quaternion.equals(_hoverQuat) || (state.hovered && !state.hovered.shown)) {
@@ -4879,6 +4922,7 @@ function updateHover() {
     state.hovered = pick();
   }
   const e = state.hovered;
+  if (e !== previous) invalidate(); // VIEW/overlays sampled the previous hover earlier in this frame
   canvas.style.cursor = e ? 'pointer' : '';
   if (!e) { if (mouseIn) tip.style.display = 'none'; return; }
   _v.set(e.px, e.gaia ? gaia.topOf(e) : e.gy + e.view.height * e.view.group.scale.y, -e.pz).project(camera);
@@ -5073,7 +5117,7 @@ class FogOfWar {
   sight(bp) {
     let r = this.sights.get(bp);
     if (r === undefined) {
-      r = CATALOG.blueprints[bp]?.sight ?? (/town_center|keep|outpost|tower|wonder/.test(bp) ? 52 : /^building/.test(bp) ? 15 : /scout/.test(bp) ? 41 : 28);
+      r = CATALOG?.blueprints?.[bp]?.sight ?? (/town_center|keep|outpost|tower|wonder/.test(bp) ? 52 : /^building/.test(bp) ? 15 : /scout/.test(bp) ? 41 : 28);
       this.sights.set(bp, r);
     }
     return r;
@@ -5257,6 +5301,8 @@ $('quality').addEventListener('change', (ev) => applyQuality(ev.target.value));
 applyQuality(localStorage.getItem('rv3d.quality') === 'low' ? 'low' : 'high');
 
 let last = performance.now(), uiTimer = 0, fpsFrames = 0, fpsTimer = 0;
+const frameMs = new Float64Array(240);
+let frameSamples = 0;
 /** Unit scale actually applied: the slider value at overview zoom, easing to true size (1×) up close when adaptive. */
 function effectiveUnitScale() {
   if (!state.adaptiveScale) return state.unitScale;
@@ -5265,13 +5311,22 @@ function effectiveUnitScale() {
 }
 function frame(now) {
   requestAnimationFrame(frame);
-  const dt = Math.min(0.1, (now - last) / 1000);
+  const rawDt = (now - last) / 1000, dt = Math.min(0.1, rawDt);
   last = now;
   if (state.playing) {
-    state.t = Math.min(R.t1, state.t + dt * state.speed);
+    state.t = clockTime(now);
     if (state.t >= R.t1) setPlaying(false);
   }
   const t = state.t;
+  // Wall-clock motion while paused: OrbitControls damping, WASD/QE and follow easing.
+  // The only deferred scene work is fog's scrub debounce; retry until its time catches up.
+  // Toast expiry/fades, sacred-site blinking and kill-feed highlights use DOM timers/CSS:
+  // they continue independently of WebGL. Wind, water, FX and poses use replay time.
+  updateCamera(dt);
+  const fogPending = state.vision && (!Number.isFinite(fog.t) || Math.abs(t - fog.t) >= FOG_EVERY);
+  if (!state.playing && !dirty && !fogPending) return;
+  const wasDirty = dirty;
+  dirty = false;
   state.scaleNow = effectiveUnitScale();
   R.updateFrame(t);
   VIEW.hoveredUnitId = state.hovered?.id ?? null;
@@ -5285,7 +5340,6 @@ function frame(now) {
   fillers.update(t); // after both: it reads the shown walls and the standing map objects
   eyes.update(t);
   terrain.wear.update(t);
-  updateCamera(dt);
   updateSky(t);
   fitShadow();
   units.update(camera); // after every set() (updateEntities, gaia.update) and the shadow box it culls against
@@ -5303,8 +5357,8 @@ function frame(now) {
   drawTrack();
   raidToasts.update(t); // every frame: it skips steps longer than playback makes (seeks)
 
-  uiTimer += dt;
-  if (uiTimer > 0.12) {
+  uiTimer += rawDt;
+  if (wasDirty || uiTimer > 0.12) {
     uiTimer = 0;
     $('clock').textContent = fmtTime(t);
     $('scaleVal').textContent = `${state.scaleNow.toFixed(2)}×`;
@@ -5323,9 +5377,12 @@ function frame(now) {
     for (const n of document.querySelectorAll('[data-n]')) n.textContent = live[n.dataset.n] ?? 0;
   }
   fpsFrames++;
-  fpsTimer += dt;
+  fpsTimer += rawDt;
+  frameMs[frameSamples++ % frameMs.length] = rawDt * 1000;
   if (fpsTimer > 0.5) {
-    $('fps').textContent = `${Math.round(fpsFrames / fpsTimer)} fps · ${renderer.info.render.calls} draws · ${(renderer.info.render.triangles / 1e6).toFixed(2)}M tris`;
+    const samples = frameMs.slice(0, Math.min(frameSamples, frameMs.length)).sort();
+    const p95 = samples[Math.ceil(samples.length * 0.95) - 1];
+    $('fps').textContent = `${Math.round(fpsFrames / fpsTimer)} fps · p95 ${p95.toFixed(1)} ms · ${renderer.info.render.calls} draws · ${(renderer.info.render.triangles / 1e6).toFixed(2)}M tris`;
     fpsFrames = 0; fpsTimer = 0;
   }
 }

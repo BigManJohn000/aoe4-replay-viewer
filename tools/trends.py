@@ -4,13 +4,14 @@ Usage:
     python tools/trends.py
 
 Reads every match in viewer/data, adds each game's result and ratings from aoe4world (api/v0/games/<id>) and writes
-viewer/data/trends/games.js. A match is re-read only when its data file changed, and aoe4world is asked only about
+viewer/data/trends/games.js. Match caches include payload and analysis-source hashes plus a schema version, and aoe4world is asked only about
 games it has not answered yet (a failed request is retried on the next run), so convert.py runs this after every
 conversion. A match needs its game ID in its name (aoe4_<id>, may_<id>); others, such as temp, are left out, and when
 two files hold the same game the newest counts. Players are matched to aoe4world's by name.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sys
@@ -20,6 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fetch_replays  # noqa: E402
+from atomicio import atomic_write_text
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "viewer" / "data"
@@ -30,7 +32,29 @@ MINUTES = 40        # length of the per-minute villager and army value curves
 BIG_FIGHT = 1000    # resources lost by all sides together that make a fight "big"
 MIN_GAME = 300      # shorter games (someone left or dropped before anything happened) are left out of the page
 AGES = {"Feudal Age": "feudal", "Castle Age": "castle", "Imperial Age": "imperial"}
-VERSION = 1        # bump when match_metrics changes, so the next run reads every match again
+VERSION = 2        # schema; source hashes invalidate math changes automatically
+
+
+def engine_hash() -> str:
+    digest = hashlib.sha256(str(VERSION).encode())
+    for path in (Path(__file__), ROOT / "tools" / "fetch_replays.py"):
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def published_matches() -> list[Path]:
+    text = (DATA_DIR / "index.js").read_text(encoding="utf-8")
+    names = json.loads(re.search(r"window\.REPLAY_INDEX\s*=\s*(\[[^;]*\])\s*;", text)[1])
+    return [DATA_DIR / f"{name}.js" for name in names if (DATA_DIR / f"{name}.js").is_file()]
+
+
+def owner_at(entity: dict, t: float) -> int:
+    owner = entity["owner"]
+    for moment, value in entity.get("owners") or []:
+        if moment > t:
+            break
+        owner = value
+    return owner
 
 
 def load_match(path: Path) -> dict:
@@ -50,6 +74,15 @@ def match_metrics(d: dict) -> dict:
         elif t <= 600:
             eco10[idx] += 1
     fights = sorted(d["fights"], key=lambda f: f["start"])
+    entities = {e["id"]: e for e in d.get("entities", [])}
+    killed = Counter()
+    for event in d.get("kills", []):
+        victim, killer = entities.get(event["victim"]), entities.get(event.get("killer"))
+        if victim is None or killer is None:
+            continue
+        vo, ko = owner_at(victim, event["t"]), owner_at(killer, event["t"])
+        if vo in team and ko in team and team[vo] != team[ko]:
+            killed[ko] += victim.get("value", 0)
     players = []
     for p in d["players"]:
         idx = p["idx"]
@@ -73,7 +106,7 @@ def match_metrics(d: dict) -> dict:
             "fightAt": round(big["start"]) if big else None,
             "bankFight": at_big[-1] if at_big else None,
             "lost": sum(f["losses"].get(str(idx), {}).get("value", 0) for f in mine),
-            "killed": sum(lo["value"] for f in mine for k, lo in f["losses"].items() if team.get(int(k)) != team[idx]),
+            "killed": killed[idx],
             "vilCurve": vil, "armyCurve": value,
         })
     return {"date": d["replay"].get("date"), "duration": round(duration), "players": players}
@@ -139,14 +172,15 @@ def rows(matches: dict, games: dict) -> list[dict]:
 
 def update() -> str:
     """Refresh viewer/data/trends/games.js; returns a one-line summary."""
-    old = {"version": VERSION, "matches": {}, "games": {}}
+    code_hash = engine_hash()
+    old = {"version": VERSION, "engineHash": code_hash, "matches": {}, "games": {}}
     if OUT.exists():
         text = OUT.read_text(encoding="utf-8")
         old = json.loads(text[len(PREFIX):text.rindex("}") + 1])
-    if old.get("version") != VERSION:
+    if old.get("version") != VERSION or old.get("engineHash") != code_hash:
         old["matches"] = {}
     newest: dict[int, Path] = {}
-    for path in sorted(DATA_DIR.glob("*.js"), key=lambda p: p.stat().st_mtime):
+    for path in sorted(published_matches(), key=lambda p: p.stat().st_mtime):
         found = re.search(r"(\d{6,})", path.stem)
         if path.stem != "index" and found:
             newest[int(found[1])] = path
@@ -154,8 +188,9 @@ def update() -> str:
     for gid, path in newest.items():
         st = path.stat()
         m = old["matches"].get(path.stem)
-        if not m or m["size"] != st.st_size or m["mtime"] != st.st_mtime_ns:
-            m = {"game": gid, "size": st.st_size, "mtime": st.st_mtime_ns, **match_metrics(load_match(path))}
+        source_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+        if not m or m.get("sourceHash") != source_hash:
+            m = {"game": gid, "size": st.st_size, "mtime": st.st_mtime_ns, "sourceHash": source_hash, **match_metrics(load_match(path))}
             read += 1
         matches[path.stem] = m
     games = {gid: g for gid, g in old["games"].items() if int(gid) in newest}
@@ -170,9 +205,9 @@ def update() -> str:
             failed += 1
         time.sleep(fetch_replays.PAUSE)
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"version": VERSION, "made": time.strftime("%Y-%m-%d %H:%M"), "rows": rows(matches, games),
+    payload = {"version": VERSION, "engineHash": code_hash, "made": time.strftime("%Y-%m-%d %H:%M"), "rows": rows(matches, games),
                "matches": matches, "games": games}
-    OUT.write_text(PREFIX + json.dumps(payload, separators=(",", ":"), ensure_ascii=False) + ";\n", encoding="utf-8")
+    atomic_write_text(OUT, PREFIX + json.dumps(payload, separators=(",", ":"), ensure_ascii=False) + ";\n")
     return (f"trends: {len(matches)} matches ({read} read), {asked} results from aoe4world"
             + (f", {failed} failed" if failed else "") + f" -> {OUT}")
 

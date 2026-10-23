@@ -144,20 +144,37 @@ const server = createServer((req, res) => {
     tweaks(req, res);
     return;
   }
-  let path = fileFor(decodeURIComponent(url.pathname));
+  let pathname;
+  try { pathname = decodeURIComponent(url.pathname); }
+  catch { res.writeHead(400).end("Bad URL"); return; }
+  let path = fileFor(pathname);
   if (!path) {
     res.writeHead(403).end();
     return;
   }
   try {
     if (statSync(path).isDirectory()) path = join(path, "index.html");
-    const size = statSync(path).size;
-    res.writeHead(200, {
-      "Content-Type": TYPES[extname(path).toLowerCase()] || "application/octet-stream",
-      "Content-Length": size,
-      "Cache-Control": "no-cache",
+    const { size, mtimeMs } = statSync(path);
+    const etag = `"${mtimeMs.toString(16)}-${size.toString(16)}"`;
+    const headers = { "ETag": etag, "Cache-Control": "private, max-age=0, must-revalidate" };
+    if (req.headers["if-none-match"]?.split(",").some((v) => v.trim().replace(/^W\//, "") === etag || v.trim() === "*")) {
+      res.writeHead(304, headers).end();
+      return;
+    }
+    const stream = createReadStream(path);
+    stream.on("error", () => {
+      if (res.headersSent) res.destroy();
+      else res.writeHead(404, { "Content-Type": "text/plain" }).end("File unavailable");
     });
-    createReadStream(path).pipe(res);
+    stream.on("open", () => {
+      res.writeHead(200, {
+        ...headers,
+        "Content-Type": TYPES[extname(path).toLowerCase()] || "application/octet-stream",
+        "Content-Length": size,
+      });
+      stream.pipe(res);
+    });
+    res.on("close", () => stream.destroy());
   } catch {
     res.writeHead(404, { "Content-Type": "text/plain" }).end("404 " + url.pathname);
   }

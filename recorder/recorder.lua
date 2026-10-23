@@ -12,7 +12,7 @@
 -- Record types (fields separated by "|", records inside a field by ";"):
 --   HDR|ver|t|worldWidth|worldLength|playerCount
 --   PL|idx|playerId|race|team|name
---   N|t|id,owner,blueprint,maxhp,isBuilding,squadId,x,z,hp      first sighting
+--   N|t|id,owner,blueprint,maxhp,isBuilding,squadId,x,z,hp      first sighting or full resync
 --   S|t|id,x,z,hp                                               state change
 --   O|t|id,owner                                                owner change
 --   A|t|attackerId,targetId                                     current attack targets
@@ -23,7 +23,7 @@
 --   K|t|key=value;...                                           GE_EntityKilled context
 --   U|t|key=value;...                                           GE_UpgradeComplete context
 --   C|t|key=value;...                                           GE_ConstructionComplete context
---   B|owner|blueprint|squadSize|key=value,...                   resource cost (per squad when squadSize > 0)
+--   B|owner|blueprint|squadSize|key=value,...|t                 resource quote at sample time (v4 omits t)
 --   D|t|squadId,x,z  or  squadId,-                              squad move destination set / cleared
 --   T|t                                                         sample heartbeat
 --   GN|t|id,blueprint,x,z,amount                                neutral (gaia) entity first sighting
@@ -33,8 +33,9 @@
 --   HMH|x0|z0|step|cols|rows                                    terrain height grid header (once)
 --   HM|row|h,h,...                                              terrain heights along x at z = z0 + row * step
 --   ERR|where|message
+--   READY|t|nonce                                              controller session identity
 
-RR_VERSION = 4
+RR_VERSION = 5
 RR_INTERVAL = 0.5
 RR_MAXREC = 60
 RR_HSTEP = 4
@@ -139,8 +140,15 @@ function RR_OnKill(c)
   if not ok then print("R|ERR|kill|" .. tostring(err)) end
 end
 
+function RR_UpgradeBody(c)
+  RR_EvDump("U", c)
+  local ok, id = pcall(Entity_GetID, c.executer)
+  local rec = ok and RR_E[id]
+  if rec then RR_BPC[rec[4]] = nil end
+end
+
 function RR_OnUpgrade(c)
-  local ok, err = pcall(RR_EvDump, "U", c)
+  local ok, err = pcall(RR_UpgradeBody, c)
   if not ok then print("R|ERR|upgrade|" .. tostring(err)) end
 end
 
@@ -149,7 +157,7 @@ function RR_OnConstruction(c)
   if not ok then print("R|ERR|construction|" .. tostring(err)) end
 end
 
-function RR_Cost(p, i, bp, pbg, sq)
+function RR_Cost(p, i, bp, pbg, sq, t)
   local ok, c, n = false, nil, 0
   if sq then
     ok, c = pcall(function() return Player_GetSquadBPCost(p, Squad_GetBlueprint(sq)) end)
@@ -167,7 +175,8 @@ function RR_Cost(p, i, bp, pbg, sq)
   for k, v in pairs(c) do
     if type(v) == "number" and not (v == 0) then parts[#parts + 1] = tostring(k) .. "=" .. RR_Num(v) end
   end
-  print("R|B|" .. i .. "|" .. bp .. "|" .. n .. "|" .. table.concat(parts, ","))
+  print("R|B|" .. i .. "|" .. bp .. "|" .. n .. "|" .. table.concat(parts, ",") .. "|" .. t)
+  return true
 end
 
 function RR_Destinations(p, dests)
@@ -324,9 +333,9 @@ function RR_SampleBody()
         else
           sq = nil
         end
-        if RR_BPC[i .. bp] == nil then
-          RR_BPC[i .. bp] = true
-          RR_Cost(p, i, bp, pbg, sq)
+        if RR_BPC[i] == nil then RR_BPC[i] = {} end
+        if RR_BPC[i][bp] == nil then
+          RR_BPC[i][bp] = RR_Cost(p, i, bp, pbg, sq, t) or false
         end
         local b = 0
         if Entity_IsBuilding(e) then b = 1 end
@@ -415,7 +424,12 @@ end
 
 function RR_Sample()
   local ok, err = pcall(RR_SampleBody)
-  if not ok then print("R|ERR|sample|" .. tostring(err)) end
+  if not ok then
+    RR_E = {}
+    RR_SQ = {}
+    RR_BPC = {}
+    print("R|ERR|sample|" .. tostring(err))
+  end
   RR_N = RR_N + 1
 end
 
@@ -441,7 +455,7 @@ function RR_Install()
   Rule_AddGlobalEvent(RR_OnUpgrade, GE_UpgradeComplete)
   Rule_AddGlobalEvent(RR_OnConstruction, GE_ConstructionComplete)
   RR_Sample()
-  print("R|READY|" .. RR_Time())
+  print("R|READY|" .. RR_Time() .. "|" .. tostring(RR_NONCE))
 end
 
 if RR_ON then

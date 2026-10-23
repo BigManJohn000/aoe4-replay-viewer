@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <title>AoE4 Replay Viewer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -11,6 +12,8 @@
     <a href="trends.html" title="One player's numbers across every recorded match: what their wins and losses look like">Trends</a>
     <div id="players"></div>
     <div class="spacer"></div>
+    <button id="sidebarToggle" aria-controls="side" aria-expanded="false">Panels</button>
+    <button id="hudDetails" aria-controls="casterHud" aria-expanded="false">HUD details</button>
     <label>Vision <select id="view"></select></label>
     <div class="option-menu">
       <button type="button" class="option-toggle" data-options="Combat" aria-controls="combatOptions" aria-expanded="false">Combat ▾</button>

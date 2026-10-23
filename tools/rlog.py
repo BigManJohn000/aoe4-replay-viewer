@@ -38,7 +38,7 @@ HEIGHT_ROW = "HM"
 ERROR = "ERR"
 
 # Recorder constants
-VERSION = 4                # RR_VERSION
+VERSION = 5                # RR_VERSION
 MAX_RECS = 60              # RR_MAXREC: records per line
 TICKS_PER_SECOND = 8       # sim ticks; the recorder samples every RR_INTERVAL = 0.5 s
 TICKS_PER_SAMPLE = 4
@@ -140,6 +140,7 @@ class Cost(NamedTuple):
     bp: str
     squad: int   # squad size; 0 for a single entity
     cost: str    # "key=value,..." as printed; cost_values() parses it
+    t: float = float("-inf")  # v4 quotes have no timestamp; valid for the whole recording
 
 
 class Stats(NamedTuple):
@@ -266,7 +267,7 @@ def _dest(p):
 
 
 def _cost(p):
-    return [Cost(int(p[1]), p[2], int(p[3]), p[4])]
+    return [Cost(int(p[1]), p[2], int(p[3]), p[4], float(p[5]) if len(p) > 5 else float("-inf"))]
 
 
 def _stats(p):
@@ -322,16 +323,13 @@ _DECODERS: dict[str, Callable[[list[str]], list]] = {
 }
 
 
-def read_lines(path: Path) -> list[str]:
-    return path.read_text(encoding="utf-8", errors="replace").splitlines()
-
 
 def records(lines: Iterable[str], kinds: Iterable[str] | None = None) -> Iterator[tuple[str, tuple]]:
     """(record type, record) for every record of the lines, or only of the given record types; the rest of the
     lines are not decoded."""
     wanted = None if kinds is None else frozenset(kinds)
     for raw in lines:
-        p = raw.split("|")
+        p = raw.rstrip("\r\n").split("|")
         kind = p[0]
         if wanted is not None and kind not in wanted:
             continue
@@ -342,4 +340,5 @@ def records(lines: Iterable[str], kinds: Iterable[str] | None = None) -> Iterato
 
 
 def read(path: Path, kinds: Iterable[str] | None = None) -> Iterator[tuple[str, tuple]]:
-    return records(read_lines(path), kinds)
+    with path.open(encoding="utf-8", errors="replace") as stream:
+        yield from records(stream, kinds)

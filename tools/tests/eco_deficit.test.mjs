@@ -38,12 +38,12 @@ test('B11: no benchmark produces null deficit, not a fictitious cost saving', ()
   assert.equal(row.capitalized.label, 'n/a');
 });
 
-test('B11: late technology retains missed minus cost, including negative opportunity costs', () => {
+test('M-02: late completed technology retains all missed income because its cost was paid', () => {
   const row = techRow({ delay: 100 });
   assert.equal(row.status, 'late');
   assert.ok(Math.abs(row.missed - 10 * 0.65 * 0.15 * 100) < 1e-9);
-  assert.equal(row.deficit, row.missed - row.costTotal);
-  assert.ok(row.deficit < 0);
+  assert.equal(row.deficit, row.missed);
+  assert.ok(row.deficit > 0);
   assert.equal(row.capitalized.applies, true);
 });
 

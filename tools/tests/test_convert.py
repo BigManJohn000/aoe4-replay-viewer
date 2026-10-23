@@ -67,7 +67,8 @@ class ConvertTests(unittest.TestCase):
 
     def test_olive_oil_mercenary_cost(self):
         e = entity()
-        costs = {(e.owner, e.bp): {'squad': 3, 'cost': rlog.cost_values('merc_byz=240,action=1')}}
+        costs = {(e.owner, e.bp): [{'t': float('-inf'), 'squad': 3,
+                                  'cost': rlog.cost_values('merc_byz=240,action=1')}]}
         self.assertEqual(convert.entity_value(e, costs), 80)
         self.assertNotIn('merc_byz', convert.RESOURCES)
 
@@ -85,6 +86,59 @@ class ConvertTests(unittest.TestCase):
             self.assertEqual((data / 'index.js').read_text(encoding='utf-8'),
                              'window.REPLAY_INDEX = ["alpha", "zebra"];\n'
                              'window.REPLAY_NOTED = ["zebra"];\n')
+
+    def parse(self, lines):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'test.rlog'
+            path.write_text('HDR|5|1|100|100|2\n' + '\n'.join(lines) + '\n', encoding='utf-8')
+            return convert.parse_rlog(path)
+
+    def test_live_new_record_resynchronizes_without_new_lifetime(self):
+        log = self.parse(['N|1|7,1,unit_test,100,0,0,10,20,100',
+                          'N|2|7,2,unit_test,100,0,0,11,22,90',
+                          'N|3|7,2,unit_test,100,0,0,12,23,80'])
+        self.assertEqual(len(log.ents), 1)
+        e = log.ents[0]
+        self.assertEqual(e.spans, [[1, None]])
+        self.assertEqual(e.owners, [[1, 1], [2, 2]])
+        self.assertEqual(e.track, [1, 10, 20, 100, 2, 11, 22, 90, 3, 12, 23, 80])
+
+    def test_v5_quote_selection_is_sorted_and_uses_first_birth(self):
+        log = self.parse(['B|1|unit_test|2|food=100,wood=50|5',
+                          'B|1|unit_test|2|food=200,wood=100|1',
+                          'N|2|7,1,unit_test,100,0,0,10,20,100',
+                          'X|3|7', 'N|6|7,1,unit_test,100,0,0,10,20,100',
+                          'N|5|8,1,unit_test,100,0,0,10,20,100'])
+        first, second = log.ents
+        self.assertEqual(convert.entity_value(first, log.costs), 150)
+        self.assertEqual(convert.entity_cost(first, log.costs), [100, 50, 0, 0])
+        self.assertEqual(convert.entity_value(second, log.costs), 75)
+        self.assertEqual(convert.entity_cost(second, log.costs), [50, 25, 0, 0])
+
+    def test_no_quote_before_birth_is_null(self):
+        log = self.parse(['N|1|7,1,unit_test,100,0,0,10,20,100', 'B|1|unit_test|0|gold=50|2'])
+        self.assertIsNone(convert.entity_cost(log.ents[0], log.costs))
+        self.assertEqual(convert.entity_value(log.ents[0], log.costs), 0)
+
+    def test_v4_quote_retains_last_timeless_value(self):
+        log = self.parse(['B|1|unit_test|0|food=100', 'N|1|7,1,unit_test,100,0,0,10,20,100',
+                          'B|1|unit_test|0|food=80'])
+        self.assertEqual(convert.entity_value(log.ents[0], log.costs), 80)
+        self.assertEqual(convert.entity_cost(log.ents[0], log.costs), [80, 0, 0, 0])
+
+    def test_v4_and_v5_cost_grammar(self):
+        old, new = [r for _, r in rlog.records(['B|1|unit_test|2|food=100',
+                                                'B|1|unit_test|2|food=80|3.5\n'])]
+        self.assertEqual(old.t, float('-inf'))
+        self.assertEqual(new.t, 3.5)
+        self.assertEqual(old[:4], (1, 'unit_test', 2, 'food=100'))
+        self.assertEqual(new[:4], (1, 'unit_test', 2, 'food=80'))
+
+    def test_payload_validation_rejects_truncated_assignment(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'test.js'
+            path.write_text('(window.REPLAY_DATA = window.REPLAY_DATA || {})["test"] = {"format":1', encoding='utf-8')
+            self.assertFalse(convert.payload_valid(path))
 
 
 if __name__ == '__main__':

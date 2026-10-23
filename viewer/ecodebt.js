@@ -37,7 +37,7 @@
   }
   function tooltip(w, t) {
     const row = w.row, missed = amount(w, t), elapsed = Math.max(0, Math.min(t, w.end) - w.start);
-    const deficit = missed - row.costTotal;
+    const deficit = missed - (row.tActual == null ? row.costTotal : 0);
     const status = t < w.start ? "Not yet delayed" : t < w.end ? "Delay active" : "Delay closed";
     const cost = row.cost;
     return w.p.name + " · " + row.name + " — " + status + "\n" +
@@ -45,7 +45,7 @@
       " (" + (row.benchSource === "opponent" ? "opponent timing" : "measured completion median") + ")\n" +
       "Lateness +" + RV.fmtTime(elapsed) + "; missed " + fmt(missed) + " res (estimated)\n" +
       "Tech cost " + fmt(row.costTotal) + " res: " + cost.f + " food / " + cost.w + " wood / " + cost.g + " gold / " + cost.s + " stone\n" +
-      "Deficit (missed − cost) " + (deficit < 0 ? "−" : "+") + fmt(Math.abs(deficit)) + " res\n" +
+      "Deficit (" + (row.tActual == null ? "missed − unspent cost" : "missed; research paid") + ") " + (deficit < 0 ? "−" : "+") + fmt(Math.abs(deficit)) + " res\n" +
       "Capitalized evidence (whole recorded window): " + (row.capitalized ? row.capitalized.reason : "No applicable decision evidence") + "\n" +
       "Click a timeline window to seek to its benchmark start.";
   }
