@@ -241,11 +241,23 @@ from `stats.js`, so civ variants (Delhi's free but slow research) count as the p
 `viewer/fights.js` reads one fight from `d.fights` (window `start`–`end`, area 1.5 × its radius) and the combat index;
 its header comment carries the full method and the measurements behind each constant.
 
-- Micro Rating = 35 % target priority (mean efficiency of each attack against the best target in reach) + 25 %
-  overkill (1 − wasted share / 0.20; waste = damage past the victim's last HP, using the measured blow-count factors
-  `KAPPA`, plus shots landing on dead targets) + 25 % uptime (ranged units' attack time over what a unit attacking
-  non-stop shows) + 15 % splash (share of siege shots hitting 2 or more targets, over 0.25). A side with no splash units
-  has the other three weights renormalised. Letters: S ≥ 90, A ≥ 75, B ≥ 60, C ≥ 45, otherwise F.
+- Micro Rating v2 is the percentile weighted mean: 30 % Priority + 25 % Focus + 15 % Kiting + 15 % Splash +
+  15 % Uptime. The parts are calibrated against 2000+ sides from 151 recorded games; 50 is the median side.
+  Priority measures target efficiency against the best target in reach. Focus = 60 % focus-kill-share percentile +
+  40 % waste-control (overkill) percentile. Kiting is the mean of moving-share and chase-gain percentiles when
+  measured. Splash measures siege shots hitting two or more units; uptime measures attack-cycle occupancy relative
+  to continuous attacking. Absent parts are omitted and available weights renormalised. Letters remain S ≥ 90,
+  A ≥ 75, B ≥ 60, C ≥ 45, otherwise F. The visible card shows each side's score, grade and five percentile bars;
+  unmeasured parts are grey.
+- Calibration evidence (higher-metric side's win share): Priority 54.8 %, overkill/waste-control alone 37.2 %
+  (winners often focus kills despite waste), Uptime 53.2 %, Splash 63.6 % (n = 22), Focus 50.7 %, Kiting 49.1 %.
+  These are descriptive, noncausal associations in the 151-game recording sample, not evidence that increasing a
+  component causes wins or that Micro Rating predicts the winner.
+- The card also shows each side's signed army-value swing between the cached before/after snapshots when army
+  data is available. Eco windows appear for fights during overdue economy upgrades, with the player's name, delay,
+  estimated missed resources and whether the non-delayed opponent punished the window or attacked but lost the
+  trade. This is distinct from the Eco panel's capitalized-delay evidence about the delayed player's military tempo;
+  unavailable eco analysis adds no row.
 - Win probability: Lanchester square law. Each side's strength is total dps against the enemy's mix × total HP at the
   fight's start, from `stats.js` records with the upgrades researched by then. p = logistic(ln(P_A / P_B) / 1.5). The
   1.5 is fitted to the showcase match (Brier 0.198 against 0.250 for coin flips), not derived. The what-if boxes add

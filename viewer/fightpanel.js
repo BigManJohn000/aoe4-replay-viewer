@@ -1,8 +1,8 @@
 // The engagement analysis panel both viewers show for a selected fight (window.RV_FIGHTPANEL), built from
 // RV_FIGHTS.analyze. A compact card is always visible: who won and the value each side lost (army / villagers /
-// buildings), pre-fight odds against the actual winner, each side's Micro Rating grade and the position tags. A closed
-// "Details / ?" accordion holds the rest: what the Micro Rating parts mean, the what-if upgrades, the cost-efficiency
-// tug-of-war chart (click seeks), idle army and late reinforcements, tag notes, target-fire shares and the eco
+// buildings), pre-fight odds against the actual winner, each side's Micro Rating and percentile bars, army swing,
+// eco windows and position tags. A closed "Details / ?" accordion holds the rest: what the Micro Rating parts mean,
+// the what-if upgrades, the cost-efficiency tug-of-war chart (click seeks), idle army and late reinforcements, tag notes, target-fire shares and the eco
 // casualties. DOM only (RV_CARD.el, RV_CARD.grade); styles are its own (classes rvf-*).
 (function () {
   "use strict";
@@ -31,9 +31,9 @@
 .rvf-key{display:flex;gap:10px;font-size:10px;opacity:.7}
 .rvf-key i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:3px}
 .rvf-odds{display:flex;height:6px;border-radius:3px;overflow:hidden;margin:3px 0 2px}
-.rvf-grid2{display:grid;grid-template-columns:1fr 1fr;gap:2px 10px}
-.rvf-comp{display:grid;grid-template-columns:repeat(4,1fr);gap:3px;margin:1px 0 5px 15px}
+.rvf-comp{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:3px;margin:1px 0 7px 15px}
 .rvf-comp>div{font-size:10px;opacity:.85}
+.rvf-comp .rvf-na{color:#94a3b8}
 .rvf-comp>div>i{display:block;height:4px;border-radius:2px;background:rgba(127,127,127,.25);margin-top:1px}
 .rvf-comp>div>i>i{display:block;height:100%;border-radius:2px;background:#60a5fa}
 .rvf-bar{display:flex;height:16px;border-radius:3px;overflow:hidden;margin:3px 0;position:relative}
@@ -72,6 +72,9 @@
   };
   const k = (v) => (v == null ? "–" : Math.abs(v) >= 1000 ? (v / 1000).toFixed(1) + "k" : String(Math.round(v)));
   const pct = (v) => `${Math.round(v * 100)} %`;
+  const MICRO_MEDIAN = "50 = median 2000+ side (151 recorded games)";
+  const MICRO_LABEL = { priority: "Priority", focus: "Focus", kiting: "Kiting", splash: "Splash", uptime: "Uptime" };
+  const signed = (v) => `${v < 0 ? "−" : "+"}${k(Math.abs(v))}`;
 
   /** Rating badge for a list row: { score, letter } or null (the side never attacked). */
   P.badge = function (r) {
@@ -134,9 +137,47 @@
           L.correct === null ? "" : L.correct ? el("span", { class: "rvf-ok" }, " (as expected)") : el("span", { class: "rvf-up" }, " (upset)")));
     }
 
-    // ── Main card 3: Micro grade ──
-    card.append(el("div", { class: "rvf-h", title: "Micro Rating 0–100 per side, graded S / A / B / C / F: how well the army picked targets, avoided wasted shots and kept attacking" }, "Micro grade"));
-    card.append(el("div", { class: "rvf-grid2" }, A.teams.map((tm) => chip(tm, P.badge(A.rating[tm])))));
+    // ── Main card 3: Micro Rating and calibrated percentiles ──
+    card.append(el("div", { class: "rvf-h", title: MICRO_MEDIAN }, "Micro Rating"));
+    for (const tm of A.teams) {
+      const r = A.rating[tm];
+      const micro = r && r.score != null
+        ? el("span", { class: "rvf-badge", title: MICRO_MEDIAN }, `Micro ${Math.round(r.score)} (`, window.RV_CARD.grade(r.letter), ")")
+        : el("span", { class: "rvf-badge rvf-na", title: MICRO_MEDIAN }, "Micro –");
+      card.append(chip(tm, micro), el("div", { class: "rvf-comp" }, Object.keys(MICRO_LABEL).map((c) => {
+        const v = r && r.pct ? r.pct[c] : null;
+        return el("div", { class: v == null ? "rvf-na" : null, title: MICRO_MEDIAN },
+          `${MICRO_LABEL[c]} ${v == null ? "–" : Math.round(v)}`,
+          el("i", {}, v == null ? null : el("i", { style: { width: `${v}%` } })));
+      })));
+    }
+
+    if (A.swing) {
+      card.append(el("div", { class: "rvf-h", title: `Change in army resource value from ${clock(A.swing.beforeTime)} to ${clock(A.swing.afterTime)}` }, "Army swing"));
+      for (const tm of A.teams) {
+        const s = A.swing.sides[tm];
+        if (!s) continue;
+        card.append(chip(tm, el("span", {
+          class: s.delta > 0 ? "rvf-ok" : s.delta < 0 ? "rvf-bad" : "rvf-muted",
+          title: `${k(s.before)} → ${k(s.after)} army resources`,
+        }, `${signed(s.delta)} res`)));
+      }
+    }
+
+    if (A.ecoWindows && A.ecoWindows.length) {
+      card.append(el("div", { class: "rvf-h", title: "Fights during an overdue economy upgrade; estimated missed resources and the non-delayed side's trade outcome" }, "Eco window"));
+      for (const w of A.ecoWindows) {
+        const actor = w.capitalizedBy;
+        const winner = duel && L.actual != null ? (L.actual === "A" ? L.A : L.B) : null;
+        const outcome = actor == null ? null : winner === actor
+          ? [" · punished by ", who(actor)]
+          : [" · ", who(actor), winner == null ? " attacked the window but traded evenly" : " attacked the window but lost the trade"];
+        card.append(el("div", { class: "rvf-eco", style: { marginLeft: 0 } },
+          el("span", { style: { color: color(w.team), fontWeight: 600 } }, w.name),
+          ` fought ${clock(w.overdue)} into an overdue ${w.techName} (−${k(w.missed)} res)`,
+          outcome));
+      }
+    }
 
     // ── Main card 4: position tags ──
     if (A.tags.length) {
@@ -149,25 +190,24 @@
     card.append(more);
 
     // 1. Micro Rating parts
-    more.append(el("div", { class: "rvf-h", title: "Target focus 35 %, overkill 25 %, uptime 25 %, splash 15 % (no siege: its weight goes to the other three)" }, "Micro Rating parts"));
-    const LABEL = { priority: "Target focus", overkill: "Overkill", uptime: "Uptime", splash: "Splash" };
+    more.append(el("div", { class: "rvf-h", title: MICRO_MEDIAN }, "Micro Rating v2 · percentile weighted mean"));
+    more.append(el("div", { class: "rvf-muted" },
+      "Micro = Σ(weight × percentile) / Σ(available weights). Priority 30%, Focus 25%, Kiting 15%, Splash 15%, Uptime 15%. ",
+      "Absent parts are omitted and the remaining weights renormalised; grey bars mean unmeasured. ",
+      "50 = median 2000+ side (151 recorded games). Letters: S ≥ 90, A ≥ 75, B ≥ 60, C ≥ 45, otherwise F."));
     const EXPLAIN = {
-      priority: "shot the valuable, low-HP targets first",
-      overkill: "higher means fewer shots wasted on almost-dead units",
-      uptime: "share of the time spent attacking rather than walking or standing (kiting)",
-      splash: "how often siege shots hit two or more units",
+      priority: "percentile of target efficiency against the best target in reach",
+      focus: "60% focus-kill-share percentile + 40% waste-control (overkill) percentile",
+      kiting: "mean of moving-share and chase-gain percentiles, using the measured parts",
+      splash: "percentile of the share of siege shots hitting two or more units",
+      uptime: "percentile of attack-cycle occupancy relative to continuous attacking",
     };
-    for (const tm of A.teams) {
-      const r = A.rating[tm];
-      more.append(chip(tm, P.badge(r)));
-      if (!r || r.score == null) continue;
-      more.append(el("div", { class: "rvf-comp" }, Object.keys(LABEL).map((c) => {
-        const v = r.components[c];
-        return el("div", { title: `${LABEL[c]}: ${v == null ? "no splash units" : pct(v)} (weight ${pct(r.weights[c])})` },
-          `${LABEL[c]} ${v == null ? "–" : Math.round(v * 100)}`, el("i", {}, el("i", { style: { width: `${(v || 0) * 100}%` } })));
-      })));
-    }
-    more.append(el("ul", { class: "rvf-expl" }, Object.keys(LABEL).map((c) => el("li", {}, el("b", {}, LABEL[c]), `: ${EXPLAIN[c]}`))));
+    more.append(el("ul", { class: "rvf-expl" }, Object.keys(MICRO_LABEL).map((c) => el("li", {}, el("b", {}, MICRO_LABEL[c]), `: ${EXPLAIN[c]}`))));
+    more.append(el("div", { class: "rvf-muted" }, "Descriptive, noncausal calibration from 151 recorded games, not a prediction of who should win."));
+    if (A.ecoWindows && A.ecoWindows.length) more.append(el("div", { class: "rvf-muted" },
+      "Eco window: an RV_ECO upgrade delay overlapping this fight; overdue time and estimated missed resources are measured at fight start. ",
+      "A non-delayed opponent who won the trade (lost less army + villager value) punished the window; an opponent who attacked but lost is labelled explicitly. ",
+      "This is separate from the Eco panel/HUD's capitalized-delay evidence, which asks whether the delayed player used the saved resources for military tempo."));
 
     // 2. What-if
     if (odds) {

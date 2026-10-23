@@ -1,8 +1,8 @@
 """Analyse harvested AoE4 summaries: python tools/analyze_summaries.py.
 
-Reads a short, read-only SQLite snapshot; writes eco_summaries.json and
-ECO_SUMMARY.md under harvest/analysis. Only the Python standard library is used.
-Technology metadata is downloaded once, then reused from harvest/cache.
+Reads a short, read-only SQLite snapshot; writes eco_summaries.json,
+army_summaries.json, ECO_SUMMARY.md and ARMY_SUMMARY.md under harvest/analysis.
+Only the standard library is used; technology/unit metadata is cached once.
 """
 from __future__ import annotations
 
@@ -349,7 +349,7 @@ def aggregate(rows: list[dict]) -> dict:
                 labels={label:wilson([r for r in late if r["window"]["label"]==label]) for label in ("attacked","defended","boomed","none")})
 
 
-def analyse(db_rows: list[sqlite3.Row], technologies: list[dict], units: list[dict]) -> dict:
+def analyse(db_rows: list[sqlite3.Row], technologies: list[dict], units: list[dict]) -> tuple[dict, dict]:
     by_action = collections.defaultdict(list)
     variants = collections.defaultdict(list)
     unit_by_pbgid = collections.defaultdict(list)
@@ -494,7 +494,7 @@ def analyse(db_rows: list[sqlite3.Row], technologies: list[dict], units: list[di
                    age="castle" if slot=="shaft-mining" else "feudal") for (civ,slot),values in sorted(medians.items())]
     matched = sum(comparison.values())
     completion = matched > 0 and sum(n for delta,n in comparison.items() if abs(delta) <= 1)/matched >= .95
-    return dict(generated_at=dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+    data = dict(generated_at=dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
                 counts=dict(ok_summaries=len(db_rows), analysed_games=len(players)//2, player_games=len(players),
                             may_player_games=sum(p["profile_id"] == MAY for p in players), tech_records=len(records),
                             statuses=dict(collections.Counter(r["status"] for r in records))),
@@ -504,6 +504,7 @@ def analyse(db_rows: list[sqlite3.Row], technologies: list[dict], units: list[di
                 timestamp_evidence=dict(interpretation="completion" if completion else "undetermined", matched_upgrades=matched,
                     action_minus_finished_seconds={str(delta): n for delta,n in sorted(comparison.items())}),
                 benchmarks=benchmarks, per_civ_medians=timing, outcomes=outcomes, records=records)
+    return data, analyse_armies(players,unit_by_pbgid)
 
 
 def rate_cell(stats: dict, ci: bool = True) -> str:
@@ -568,18 +569,285 @@ def report(data: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+AGE_EDGES = tuple(range(270,1231,60))
+CASTLE_DIFF_BUCKETS = ("<-300","-300..-121","-120..-31","-30..30","31..120","121..300",">300")
+ARMY_NOTES = [
+    "Composition uses catalogue baseId by pbgid/civ; unmatched transformed pbgids retain the icon's last segment verbatim. Metadata military classes identify mapped units; icon exclusions identify civilians for unmatched units. Initial t=0 units are not produced. Main means >=15% of military completions.",
+    "Composition table shows the 12 most frequent main types; full unit table, all qualifying counter pairs, player-game counts and mapping coverage are in JSON. Mean production and survival refer to main-unit appearances; survival=1-summed destroyed/summed produced, not matched individual lifetimes, so captures/initial units can make it negative.",
+    "Counter pairs are ordered X-side player-games with both types main (n>=25 overall); multi-main armies contribute to multiple pairs. Top 15 are ranked by absolute WR-50%, not causal counters; repeated players, paired sides, civ/MMR, patch and game length confound associations. Wilson 95% CIs are unclustered.",
+    "Military values are preferred only when both players expose the same value series, otherwise resources.military is used (a score, not resource cost). Samples are left-held on the union of timestamps through game end; ties are excluded from lead/swing win rates. Swing=max absolute lead change across any two samples <=60s apart; its beneficiary is the gaining side. Equal opposite maxima are ambiguous and excluded. Restricted variants require both samples strictly before game end-120s or before 15:00 respectively; no-swing/ambiguous games are excluded per variant. Lead changes ignore zero ties.",
+    "Lead/swing May column means games containing May and asks whether the leading/benefiting side won; composition, pairs and age May columns instead mean May's player-games. Checkpoints require game duration>=time and recorded coverage. Age buckets use completion times; missing ages and unmatched Castle comparisons are censored and retained in JSON.",
+]
+
+
+def clock(seconds: float) -> str:
+    return f"{int(seconds)//60}:{int(seconds)%60:02d}"
+
+
+def age_labels() -> list[str]:
+    return ["≤"+clock(AGE_EDGES[0])] + [clock(a)+"–"+clock(b) for a,b in zip(AGE_EDGES,AGE_EDGES[1:])] + [">"+clock(AGE_EDGES[-1])]
+
+
+def arrival_bucket(moment: float | None) -> str:
+    return "not reached" if moment is None else age_labels()[bisect.bisect_left(AGE_EDGES,moment)]
+
+
+def castle_diff_bucket(difference: float) -> str:
+    return CASTLE_DIFF_BUCKETS[0 if difference < -300 else 1 if difference < -120 else 2 if difference < -30 else 3 if difference<=30 else 4 if difference<=120 else 5 if difference<=300 else 6]
+
+
+def composition(player: dict, unit_by_pbgid: dict, mappings: dict, coverage: collections.Counter) -> dict:
+    units = collections.defaultdict(lambda:dict(produced=0,destroyed=0))
+    code = CIV_CODES.get(player["civilization"])
+    for entry in player.get("buildOrder",[]):
+        kind = unit_kind(entry)
+        if kind is None:
+            continue
+        candidates = unit_by_pbgid.get(int(entry["pbgid"]),[])
+        unit = next((u for u in candidates if code in u.get("civs",[])),candidates[0] if candidates else None)
+        if unit:
+            classes = unit.get("classes",[])
+            military = any(c in classes for c in ("military","land_military","naval_military"))
+            base = unit["baseId"]
+        else:
+            military = kind=="military"
+            base = entry.get("icon","").rsplit("/",1)[-1]
+        if not military:
+            continue
+        source = "pbgid" if unit else "icon"
+        produced = sum(0<t<=player["end"] for t in times(entry.get("finished")))
+        destroyed = sum(0<t<=player["end"] for t in times(entry.get("destroyed")))
+        units[base]["produced"] += produced
+        units[base]["destroyed"] += destroyed
+        coverage[source+"_produced"] += produced
+        coverage[source+"_destroyed"] += destroyed
+        mappings[str(entry["pbgid"])] = dict(base_id=base,source=source,icon=entry.get("icon"))
+    total = sum(counts["produced"] for counts in units.values())
+    main = sorted(base for base,counts in units.items() if total>0 and counts["produced"]/total>=.15)
+    return dict(game_id=player["game_id"],profile_id=player["profile_id"],name=player.get("name"),
+                civ=player["civilization"],result=player.get("result"),duration=player["end"],
+                units=dict(sorted(units.items())),military_produced=total,main_units=main,
+                feudal=player["feudal"],castle=player["castle"],
+                feudal_bucket=arrival_bucket(player["feudal"]),castle_bucket=arrival_bucket(player["castle"]),
+                castle_difference=player["castle"]-player["opponent"]["castle"] if player["castle"] is not None and player["opponent"]["castle"] is not None else None)
+
+
+def army_score_series(player: dict, key: str) -> list[tuple[float,float]]:
+    resources = player.get("resources",{})
+    return sorted((float(t),float(v)) for t,v in zip(resources.get("timestamps",[]),resources.get(key,[]))
+                  if isinstance(t,(int,float)) and isinstance(v,(int,float)) and math.isfinite(t) and math.isfinite(v) and 0<=t<=player["end"])
+
+
+def biggest_swing(series: list, cutoff: float | None = None) -> dict:
+    minima,maxima = collections.deque(),collections.deque()
+    largest,beneficiary,ambiguous = 0.0,None,False
+    result=dict(max_swing=None,swing_side=None,swing_start=None,swing_end=None,swing_tied=False,cutoff=cutoff)
+    observed=False
+    for stamp,lead in series:
+        if cutoff is not None and stamp>=cutoff:
+            break
+        observed=True
+        for queue in (minima,maxima):
+            while queue and queue[0][0]<stamp-60:
+                queue.popleft()
+        for queue,side in ((minima,0),(maxima,1)):
+            if not queue:
+                continue
+            old_stamp,old_lead=queue[0]
+            gain=lead-old_lead if side==0 else old_lead-lead
+            if gain>largest:
+                largest,beneficiary,ambiguous=gain,side,False
+                result["swing_start"],result["swing_end"]=old_stamp,stamp
+            elif gain>0 and math.isclose(gain,largest,abs_tol=1e-9) and side!=beneficiary:
+                ambiguous=True
+        while minima and minima[-1][1]>=lead:
+            minima.pop()
+        while maxima and maxima[-1][1]<=lead:
+            maxima.pop()
+        minima.append((stamp,lead))
+        maxima.append((stamp,lead))
+    result.update(max_swing=largest if observed else None,
+                  swing_side=beneficiary if largest>0 and not ambiguous else None,swing_tied=ambiguous)
+    return result
+
+
+def army_swing(a: dict, b: dict) -> dict:
+    ar,br = a.get("resources",{}),b.get("resources",{})
+    value_keys = sorted(k for k in ar.keys() & br.keys() if normalized(k) in ("militaryvalue","militaryresourcevalue","armyvalue"))
+    source = next((key for key in value_keys if ar[key] and br[key]),"military")
+    sa,sb = army_score_series(a,source),army_score_series(b,source)
+    row = dict(game_id=a["game_id"],profiles=[a["profile_id"],b["profile_id"]],
+               results=[a.get("result"),b.get("result")],duration=min(a["end"],b["end"]),
+               has_may=MAY in (a["profile_id"],b["profile_id"]),source=source,
+               max_swing=None,swing_side=None,swing_start=None,swing_end=None,swing_tied=False,
+               lead_changes=None,checkpoint_leaders={},lead_series=[],
+               swing_variants={key:biggest_swing([],cutoff) for key,cutoff in
+                               (("excluding_last_120",min(a["end"],b["end"])-120),("before_15",900))})
+    if not sa or not sb:
+        return row
+    stamps = sorted({t for t,_ in sa+sb})
+    ia=ib=-1
+    for stamp in stamps:
+        while ia+1<len(sa) and sa[ia+1][0]<=stamp:
+            ia+=1
+        while ib+1<len(sb) and sb[ib+1][0]<=stamp:
+            ib+=1
+        if ia>=0 and ib>=0:
+            row["lead_series"].append((stamp,sa[ia][1]-sb[ib][1]))
+    row.update(biggest_swing(row["lead_series"]))
+    row["swing_variants"]={key:biggest_swing(row["lead_series"],cutoff) for key,cutoff in
+                           (("excluding_last_120",row["duration"]-120),("before_15",900))}
+    last_sign,changes=0,0
+    for _,lead in row["lead_series"]:
+        sign=1 if lead>0 else -1 if lead<0 else 0
+        if sign:
+            changes+=bool(last_sign and sign!=last_sign)
+            last_sign=sign
+    row["lead_changes"]=changes
+    series=row["lead_series"]
+    stamps=[t for t,_ in series]
+    for minute in (10,15,20):
+        moment=minute*60
+        i=bisect.bisect_right(stamps,moment)-1
+        if row["duration"]<moment:
+            state="not reached"
+        elif i<0:
+            state="missing"
+        else:
+            lead=series[i][1]
+            state=0 if lead>0 else 1 if lead<0 else "tie"
+        row["checkpoint_leaders"][str(minute)]=state
+    return row
+
+
+def analyse_armies(players: list[dict], unit_by_pbgid: dict) -> dict:
+    mappings,coverage={},collections.Counter()
+    records=[composition(p,unit_by_pbgid,mappings,coverage) for p in players]
+    by_player={(r["game_id"],r["profile_id"]):r for r in records}
+    for player in players:
+        row=by_player[(player["game_id"],player["profile_id"])]
+        row["opponent_main_units"]=by_player[(player["game_id"],player["opponent"]["profile_id"])]["main_units"]
+        other=player["opponent"]["castle"]
+        row["castle_difference_bucket"]=castle_diff_bucket(row["castle_difference"]) if row["castle_difference"] is not None else "only player Castle" if player["castle"] is not None else "only opponent Castle" if other is not None else "neither Castle"
+    seen=set()
+    games=[]
+    for player in players:
+        if player["game_id"] not in seen:
+            seen.add(player["game_id"])
+            games.append(army_swing(player,player["opponent"]))
+    compositions,counter_pairs,ages,differences,swings={},{},{},{},{}
+    for cohort in ("all","May"):
+        selected=[r for r in records if cohort=="all" or r["profile_id"]==MAY]
+        unit_rows=collections.defaultdict(list)
+        pair_rows=collections.defaultdict(list)
+        for row in selected:
+            for base in row["main_units"]:
+                unit_rows[base].append(row)
+                for enemy in row["opponent_main_units"]:
+                    pair_rows[(base,enemy)].append(row)
+        compositions[cohort]=[]
+        for base,rows in unit_rows.items():
+            produced=sum(r["units"][base]["produced"] for r in rows)
+            destroyed=sum(r["units"][base]["destroyed"] for r in rows)
+            compositions[cohort].append(dict(unit=base,games_as_main=len(rows),outcome=wilson(rows),
+                 mean_produced=produced/len(rows),produced=produced,destroyed=destroyed,
+                 survival=1-destroyed/produced if produced else None))
+        compositions[cohort].sort(key=lambda r:(-r["games_as_main"],r["unit"]))
+        counter_pairs[cohort]=[dict(my_unit=x,opponent_unit=y,**wilson(rows)) for (x,y),rows in sorted(pair_rows.items())]
+        ages[cohort]={age:{label:wilson([r for r in selected if r[age+"_bucket"]==label]) for label in age_labels()+["not reached"]} for age in ("feudal","castle")}
+        differences[cohort]={label:wilson([r for r in selected if r["castle_difference_bucket"]==label]) for label in CASTLE_DIFF_BUCKETS+("only player Castle","only opponent Castle","neither Castle")}
+        selected_games=[g for g in games if cohort=="all" or g["has_may"]]
+        checkpoints={}
+        for minute in (10,15,20):
+            known=[g for g in selected_games if isinstance(g["checkpoint_leaders"].get(str(minute)),int)]
+            checkpoints[str(minute)]=dict(outcome=wilson([dict(result=g["results"][g["checkpoint_leaders"][str(minute)]]) for g in known]),
+                states=dict(collections.Counter(str(g["checkpoint_leaders"].get(str(minute),"missing")) for g in selected_games)))
+        known_swings=[g for g in selected_games if g["swing_side"] is not None]
+        variant_outcomes={}
+        for key in ("excluding_last_120","before_15"):
+            eligible=[g for g in selected_games if g["swing_variants"][key]["swing_side"] is not None]
+            variant_outcomes[key]=dict(outcome=wilson([dict(result=g["results"][g["swing_variants"][key]["swing_side"]]) for g in eligible]),
+                ambiguous=sum(g["swing_variants"][key]["swing_tied"] for g in selected_games),
+                missing_series=sum(g["swing_variants"][key]["max_swing"] is None for g in selected_games))
+        swings[cohort]=dict(games=len(selected_games),score_sources=dict(collections.Counter(g["source"] for g in selected_games)),
+                           median_max_swing=median(g["max_swing"] for g in selected_games),
+                           median_lead_changes=median(g["lead_changes"] for g in selected_games),
+                           total_lead_changes=sum(g["lead_changes"] or 0 for g in selected_games),
+                           biggest_swing_wins=wilson([dict(result=g["results"][g["swing_side"]]) for g in known_swings]),
+                           restricted_biggest_swing_wins=variant_outcomes,
+                           ambiguous_swings=sum(g["swing_tied"] for g in selected_games),
+                           missing_series=sum(g["max_swing"] is None for g in selected_games),
+                           checkpoints=checkpoints)
+    qualifying=[r for r in counter_pairs["all"] if r["n"]>=25]
+    qualifying.sort(key=lambda r:(-abs(r["win_rate"]-.5),-r["n"],r["my_unit"],r["opponent_unit"]))
+    return dict(generated_at=dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+                counts=dict(games=len(games),player_games=len(records),may_player_games=sum(r["profile_id"]==MAY for r in records),
+                            military_mapping=dict(coverage),qualifying_counter_pairs=len(qualifying)),
+                assumptions=ARMY_NOTES,unit_mapping=dict(sorted(mappings.items())),composition=compositions,
+                counter_pairs=counter_pairs,top_counter_pairs=qualifying[:15],age_timing=ages,
+                castle_time_difference=differences,army_swings=swings,player_games=records,games=games)
+
+
+def army_report(data: dict) -> str:
+    c=data["counts"]
+    lines=["# Army summary analysis","",
+           f"Snapshot {data['generated_at']}: {c['ok_summaries']} ok summaries, {c['games']} analysed games, {c['player_games']} player-games; May {c['may_player_games']}; excluded {c['excluded_summaries']} non-1v1/invalid summaries (details in JSON).",
+           "Rates show wins/n [Wilson 95% CI]. May means May's player-games except lead/swing rows, which use games containing May."]
+    lines += ["","## Main-unit composition","Top 12 by games as main; full table in JSON. Mean production and pooled survival use these main-unit appearances.",
+              "| Unit | Main games: all / May | WR all | WR May | Mean produced: all / May | Survival: all / May |","|---|---|---|---|---|---|"]
+    may={r["unit"]:r for r in data["composition"]["May"]}
+    for row in data["composition"]["all"][:12]:
+        m=may.get(row["unit"])
+        lines.append(f"| {row['unit']} | {row['games_as_main']} / {m['games_as_main'] if m else 0} | {rate_cell(row['outcome'])} | {rate_cell(m['outcome']) if m else '— (0)'} | {row['mean_produced']:.1f} / {format(m['mean_produced'],'.1f') if m else '—'} | {share_cell(row['survival'])} / {share_cell(m['survival']) if m else '—'} |")
+    lines += ["","## Counter pairs","Ordered main-unit pairs, n≥25 overall; top 15 by |WR−50%|. Not a causal matchup ranking.",
+              "| My main unit | Opponent main unit | WR all | WR May |","|---|---|---|---|"]
+    may_pairs={(r["my_unit"],r["opponent_unit"]):r for r in data["counter_pairs"]["May"]}
+    for row in data["top_counter_pairs"]:
+        m=may_pairs.get((row["my_unit"],row["opponent_unit"]))
+        lines.append(f"| {row['my_unit']} | {row['opponent_unit']} | {rate_cell(row)} | {rate_cell(m) if m else '— (0)'} |")
+    lines += ["","## Military lead and swings","| Measurement | All games | May games |","|---|---|---|"]
+    a,m=data["army_swings"]["all"],data["army_swings"]["May"]
+    for minute in (10,15,20):
+        lines.append(f"| Leader at {minute} min wins | {rate_cell(a['checkpoints'][str(minute)]['outcome'])} | {rate_cell(m['checkpoints'][str(minute)]['outcome'])} |")
+    swing_cells=[]
+    for stats in (a,m):
+        swing_cells.append("; ".join(rate_cell(outcome) for outcome in
+            (stats["biggest_swing_wins"],stats["restricted_biggest_swing_wins"]["excluding_last_120"]["outcome"],
+             stats["restricted_biggest_swing_wins"]["before_15"]["outcome"])))
+    lines.append(f"| Biggest ≤60s swing beneficiary wins: full / excl. last 120s / before 15:00 | {swing_cells[0]} | {swing_cells[1]} |")
+    lines.append(f"Median max swing: {number(a['median_max_swing'])} all / {number(m['median_max_swing'])} May; median lead changes: {number(a['median_lead_changes'])} / {number(m['median_lead_changes'])}; total changes: {a['total_lead_changes']} / {m['total_lead_changes']}.")
+    lines += ["","## Age arrival timing","| Completion bucket | Feudal WR all | Feudal WR May | Castle WR all | Castle WR May |","|---|---|---|---|---|"]
+    for label in age_labels():
+        cells=[rate_cell(data["age_timing"][cohort][age][label]) for age in ("feudal","castle") for cohort in ("all","May")]
+        lines.append(f"| {label} | "+" | ".join(cells)+" |")
+    lines += ["","## Castle-time difference (player minus opponent seconds; both reached Castle)",
+              "| Difference (s) | WR all | WR May |","|---|---|---|"]
+    for label in CASTLE_DIFF_BUCKETS:
+        lines.append(f"| {label} | {rate_cell(data['castle_time_difference']['all'][label])} | {rate_cell(data['castle_time_difference']['May'][label])} |")
+    lines += ["","## Method and limits"]+["- "+note for note in ARMY_NOTES]
+    if len(lines)>90:
+        raise ValueError(f"Army report exceeds 90 lines ({len(lines)})")
+    return "\n".join(lines)+"\n"
+
+
 def main() -> None:
     start = time.perf_counter()
     technologies = metadata()
     units = metadata(UNIT_CACHE, UNIT_URL)
     rows, statuses = snapshot()
-    data = analyse(rows, technologies, units)
+    data,army = analyse(rows, technologies, units)
     data["counts"]["summary_statuses"] = statuses
     data["analysis_seconds"] = round(time.perf_counter()-start, 3)
     markdown = report(data)
+    army["counts"]["summary_statuses"] = statuses
+    army["counts"].update(ok_summaries=len(rows),excluded_summaries=len(data["errors"]))
+    army["errors"] = data["errors"]
+    army_markdown = army_report(army)
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / "eco_summaries.json").write_text(json.dumps(data, indent=2, allow_nan=False), encoding="utf-8")
     (OUT / "ECO_SUMMARY.md").write_text(markdown, encoding="utf-8")
+    (OUT / "army_summaries.json").write_text(json.dumps(army,indent=2,allow_nan=False),encoding="utf-8")
+    (OUT / "ARMY_SUMMARY.md").write_text(army_markdown,encoding="utf-8")
     # Keep each run under 60 console lines even as new civ variants appear.
     items = list(data["mapping"].items())
     for i in range(0, len(items), 2):
@@ -589,6 +857,7 @@ def main() -> None:
     for tech in DEFS:
         print(f"Benchmark {tech} ({'Castle' if tech=='shaft-mining' else 'Feudal'}): {benchmark_cells(data,tech)}")
     print(f"Wrote {OUT.relative_to(ROOT)}/eco_summaries.json + ECO_SUMMARY.md ({len(markdown.splitlines())} lines), {time.perf_counter()-start:.3f}s including output")
+    print(f"Army: {army['counts']['games']} games, {army['counts']['player_games']} player-games; {army['counts']['qualifying_counter_pairs']} qualifying pairs; ARMY_SUMMARY.md {len(army_markdown.splitlines())} lines")
 
 
 if __name__ == "__main__":

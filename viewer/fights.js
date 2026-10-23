@@ -19,7 +19,7 @@
 //
 // analysis = {
 //   id, index, t0, t1, x, z, radius, area, teams, sides: [{ team, players, names, civs, colors, army }],
-//   rating:     { team: { score (0–100), letter, components: { priority, overkill, uptime, splash }, weights, n } }
+//   rating:     { team: { score (0–100), letter, version: 2, components: { priority, overkill, uptime, splash, focus, kiting, kitingChaseGain }, pct, weights, n } }
 //   lanchester: { A, B, p (side A wins), predicted, actual, correct, strength, expected }
 //   tug:        { series: [[t, killedValueA − killedValueB]], cum: { team: [[t, v]] }, events, final }
 //   whatIf(opts): see below
@@ -28,27 +28,22 @@
 //   lost:       { total: { team: resources }, parts: { team: { army, vill, bldg } } }; impact, ecoDamage (resources): see list()
 //   heat:       { lines: [{ a, b, team, victimTeam, eff, grade, damage, n, ax, az, bx, bz, t0, t1 }], bySide }
 //   eco:        { team: { militaryLost, villagerLost, ecoBuildingLost, otherBuildingLost, villagersPulled, …, forcedIdle } }
+//   swing:      { beforeTime, afterTime, sides: { team: { before, after, delta } }, net } | null (whole-army series)
+//   ecoWindows: [{ player, team, name, tech, techName, start, end, overdue, missed, capitalizedBy }] | null
 // }
 //
-// ── Micro Rating (0–100, per side) ──
-// A weighted mean of four components, each 0–1 (letter: RV_FRAME.letter on score/100, S ≥ 90, A ≥ 75, B ≥ 60, C ≥ 45, else F):
-//   priority 35 %  mean RV_FRAME.effAt efficiency over the side's unit-vs-enemy attack pairs inside the window and area
-//                  (efficiency = Damage(A→B)·Cost(B)/CurHP(B) over the best such score within A's reach; 1 = optimal).
-//   overkill 25 %  1 − wasted share, scaled: wasted = (a) the surplus at killing drops: the credited blows' expected damage
-//                  Σx, divided by KAPPA[n] (mid-fight drops with n credited blows show Σx/drop of 1.19 / 1.38 / 1.47 for
-//                  n = 2 / 3 / 4+, since not every credited blow lands), minus the HP the victim had left, summed per side
-//                  and clamped at 0; plus (b) shots whose target died before the projectile landed (frame.js blow.miss
-//                  with the target dead at landing). share = wasted / (dealt + wasted), typically 1 % (p90 32 % in small
-//                  fights), so score = 1 − min(1, share / OVERKILL_CAP), OVERKILL_CAP = 0.20.
-//   uptime   25 %  DPS uptime. Per armed unit: attack-flagged samples (C.per) × 0.5 s over its engaged time (from its first
-//                  attack or damage taken in the window until it dies or the fight ends). Normalised by the uptime a
-//                  continuously attacking unit shows: REF = 0.75 s / weapon period (a flagged pulse spans ~1.5 samples;
-//                  measured in aoe4_245598603: p90 of ranged uptimes 0.34–0.56 against refs 0.35–0.46). Value × engaged
-//                  time weighted. Ranged (non-siege) units only; a side with none uses all its armed units (basis: "all").
-//   splash   15 %  siege/splash units (SPLASH, the frame.js set): share of their shots landing on ≥ 2 targets over SPLASH_REF
-//                  (0.25, capped at 1; p90 of showcase sides is 0.18). A side with no such unit has no splash component
-//                  and the other three weights are renormalised (no neutral 0.5).
-// A side with no attack pair, no engaged unit and no splash has rating null.
+// ── Micro Rating v2 (0–100, per side) ──
+// Raw observations are mapped piecewise-linearly to percentiles of 151 recorded 2000+ games: 50 = median side.
+// Equal calibration quantiles share their midpoint percentile; extrapolation is clamped to 0–100.
+// Weighted mean: priority 30 %, focus fire 25 %, kiting 15 %, splash 15 %, uptime 15 %; absent parts renormalise.
+// Focus combines 60 % percentile of kills with ≥3 recent attackers and 40 % percentile of waste control.
+// Kiting combines moving-shot and chase-gain percentiles equally, using available observations; absent without
+// ranged shots and hostile melee in the fight. Splash is absent without siege/splash shots.
+// Existing raw priority, overkill, uptime and splash components retain their original definitions for calibration.
+// Waste control = 1 − min(1, wasteShare / 0.20), with KAPPA correcting credited killing-blow surplus.
+// Uptime = value-time weighted attack flags / engaged in-area time, normalised by 0.75 / weapon period;
+// ranged units preferred, all armed units as fallback. Splash = min(1, multi-victim shot share / 0.25).
+// Letters remain RV_FRAME.letter(score / 100): S ≥90, A ≥75, B ≥60, C ≥45, else F.
 //
 // ── Lanchester square law ──
 // At t0 each side's armed units (cat infantry/cavalry/ranged/siege) alive within 2 × fight.radius of the centre are
@@ -106,7 +101,45 @@
   const SAMPLE = 0.5;
   const AREA = 1.5;                 // × fight.radius
   const STRENGTH_R = 2;             // × fight.radius, units counted in the Lanchester strength
-  const W = { priority: 0.35, overkill: 0.25, uptime: 0.25, splash: 0.15 };
+  const W = { priority: 0.30, focus: 0.25, kiting: 0.15, splash: 0.15, uptime: 0.15 };
+  // harvest/analysis/micro_calibration.json, 151 recorded 2000+ MMR 1v1 games, 2026-10-23.
+  //                    p10     p25     p50     p75      p90     higher wins   corr
+  // priority           .443    .623    .805    .953     1       54.8%        +.093
+  // overkill           0       .661    1       1        1       37.2%        −.134
+  // uptime             .202    .338    .541    .757     .922    53.2%        +.058
+  // splash             0       0       .1085   .571     1       63.6% (n22)  +.262
+  // moving share       0       0       0       .06975   .2      49.1%        −.044
+  // chase gain (m)    −1.348   −.527    0       1.98975  6.5499 49.1%        −.029
+  // focus kill share   0       .2      .606    1        1       50.7%        +.049
+  // Descriptive, not causal: winners finish more focused kills, making waste control alone misleading.
+  const CAL = {
+    priority: [0.443, 0.623, 0.805, 0.953, 1],
+    overkill: [0, 0.661, 1, 1, 1],
+    uptime: [0.202, 0.338, 0.541, 0.757, 0.922],
+    splash: [0, 0, 0.1085, 0.571, 1],
+    kiting: [0, 0, 0, 0.06975, 0.2],
+    kitingChaseGain: [-1.348, -0.527, 0, 1.98975, 6.5499],
+    focus: [0, 0.2, 0.606, 1, 1],
+  };
+  const QUANTILES = [10, 25, 50, 75, 90];
+  function percentile(key, raw) {
+    if (raw == null || !Number.isFinite(raw)) return null;
+    const q = CAL[key];
+    let prevX, prevY, firstX, firstY, secondX, secondY;
+    for (let i = 0; i < q.length;) {
+      let j = i;
+      while (j + 1 < q.length && q[j + 1] === q[i]) j++;
+      const x = q[i], y = (QUANTILES[i] + QUANTILES[j]) / 2;
+      if (raw === x) return y;
+      if (firstX === undefined) { firstX = x; firstY = y; }
+      else if (secondX === undefined) { secondX = x; secondY = y; }
+      if (prevX !== undefined && raw < x && raw > prevX) return prevY + (y - prevY) * (raw - prevX) / (x - prevX);
+      if (raw < firstX && secondX !== undefined) return clamp(firstY + (secondY - firstY) * (raw - firstX) / (secondX - firstX), 0, 100);
+      if (j === q.length - 1 && raw > x) return prevX === undefined ? y : clamp(y + (y - prevY) * (raw - x) / (x - prevX), 0, 100);
+      prevX = x; prevY = y; i = j + 1;
+    }
+    return firstY;
+  }
   const OVERKILL_CAP = 0.2;
   // Σ expected blow damage / recorded HP drop over mid-fight drops with n credited blows in aoe4_245598603 (n = 1…4+); the
   // kill drop's surplus over this baseline is overkill
@@ -213,6 +246,74 @@
       I.perT.set(id, a);
     }
     return a;
+  }
+
+  // Shot/kill diagnostics share the analyser's definitions and are indexed once, not rebuilt on playback frames.
+  function microInfo(C) {
+    const I = cInfo(C);
+    if (I.micro) return I.micro;
+    const Fr = F(), kills = [], shots = [];
+    for (const kill of C.kills) {
+      const killer = C.byId.get(kill.killer), victim = C.byId.get(kill.victim);
+      if (!killer || !victim) continue;
+      let attackers = 0;
+      for (const [id, flags] of C.per) {
+        const e = C.byId.get(id);
+        let lo = 0, hi = flags.length >> 1;
+        while (lo < hi) { const m = (lo + hi) >> 1; if (flags[m * 2] <= kill.t) lo = m + 1; else hi = m; }
+        const j = (lo - 1) * 2;
+        if (!e || j < 0 || flags[j + 1] !== victim.id || !Fr.alive(e, kill.t - 0.001) || C.teamOf(e, kill.t) === C.teamOf(victim, kill.t)) continue;
+        const st = Fr.statsAt(C, e, kill.t), period = st && st.period || 0;
+        let recent = flags[j] >= kill.t - SAMPLE;
+        if (!recent) {
+          const blows = C.lists.get(id) || [];
+          for (let k = blows.length - 1; k >= 0; k--) {
+            if (blows[k].t0 > kill.t) continue;
+            if (blows[k].t0 < kill.t - 2 * period) break;
+            if (blows[k].b.id === victim.id) { recent = true; break; }
+          }
+        }
+        if (recent) attackers++;
+      }
+      const p = pos(victim, kill.t - 0.001);
+      kills.push({ t: kill.t, x: p.x, z: p.z, team: C.teamOf(killer, kill.t), multi: attackers >= 3 });
+    }
+    const melee = C.ents.filter((e) => !["building", "attachment", "livestock", "other", "siege"].includes(e.cat) && (Fr.statOf(e.bp) || {}).wp?.some((w) => w.ty === "melee"));
+    for (const mine of C.lists.values()) {
+      let previous = null;
+      for (const bl of mine) {
+        if (!(bl.shot || (!bl.torch && (bl.dtype === "pierce" || bl.a.cat === "ranged" || bl.a.type === "horsearcher")))) continue;
+        const e = bl.a, t = bl.t0, sa = Fr.statsAt(C, e, t), main = sa && weaponsOf(sa)[0];
+        if (e.cat === "siege" || e.cat === "villager" || e.cat === "econ" || !(e.cat === "ranged" || e.type === "horsearcher" || main && main.ty === "ranged")) continue;
+        const p = pos(e, t), team = C.teamOf(e, t), owner = Fr.ownerAt(e, t);
+        let enemy = null, distance = Infinity;
+        for (const m of melee) {
+          const mt = C.teamOf(m, t);
+          if (m === e || !Fr.alive(m, t) || mt == null || mt === team) continue;
+          const q = pos(m, t), dist = Math.hypot(q.x - p.x, q.z - p.z);
+          if (dist < distance) { distance = dist; enemy = m; }
+        }
+        let moving = false, chaseGain = null;
+        if (previous && previous.owner === owner) {
+          moving = Math.hypot(p.x - previous.x, p.z - previous.z) > 0.5;
+          if (previous.enemy && previous.distance <= 8 && previous.chasing && Fr.alive(previous.enemy, t)) {
+            const q = pos(previous.enemy, t);
+            chaseGain = Math.hypot(q.x - p.x, q.z - p.z) - previous.distance;
+          }
+        }
+        let chasing = false;
+        if (enemy && distance <= 8 && Fr.alive(enemy, t - SAMPLE)) {
+          const q = pos(enemy, t - SAMPLE);
+          chasing = Math.hypot(q.x - p.x, q.z - p.z) > distance + 0.01;
+        }
+        const shot = { t, x: p.x, z: p.z, team, owner, enemy, distance, chasing, moving, chaseGain,
+          previous: previous && previous.owner === owner ? previous : null };
+        shots.push(shot);
+        previous = shot;
+      }
+    }
+    I.micro = { kills, shots, melee };
+    return I.micro;
   }
 
   // ── terrain / obstacles ──
@@ -353,10 +454,65 @@
       id: f.id, index, t0, t1, x: cx, z: cz, radius: f.radius, area, teams, sides, A: tA, B: tB,
       rating, lanchester: lanch.result, whatIf: lanch.whatIf,
       tug: tug(), idle: idleScan(), tags: tags(ecoR), heat: heat(), eco: ecoR, lost, impact, ecoDamage,
+      swing: armySwing(), ecoWindows: ecoWindows(),
     };
     out.flank = flankStats;
     for (const s of sides) { s.army = fin(lanch.result.strength[s.team] && lanch.result.strength[s.team].value); }
     return out;
+
+    function armySwing() {
+      if (!d.army || !d.army.players || !(d.army.step > 0)) return null;
+      const beforeTime = Math.max(0, t0 - 10), afterTime = Math.min(d.duration, t1 + 10);
+      const result = { beforeTime, afterTime, sides: {}, net: 0 };
+      for (const side of sides) {
+        let before = 0, after = 0;
+        for (const pi of side.players) {
+          const series = (d.army.players[pi] || {}).armyValue;
+          if (!series || !series.length) return null;
+          before += series[Math.min(series.length - 1, Math.floor(beforeTime / d.army.step))] || 0;
+          after += series[Math.min(series.length - 1, Math.floor(afterTime / d.army.step))] || 0;
+        }
+        result.sides[side.team] = { before, after, delta: after - before };
+      }
+      result.net = (result.sides[tA]?.delta || 0) - teams.slice(1).reduce((sum, tm) => sum + result.sides[tm].delta, 0);
+      return result;
+    }
+
+    function ecoWindows() {
+      const E = window.RV_ECO;
+      if (!E || !E.analyze || !E.series) return null;
+      // Same delay boundaries and cumulative missed-resource interpolation as ecodebt.js; RV_ECO owns benchmarks.
+      if (!I.ecoWindows) {
+        I.ecoWindows = [];
+        for (const pl of E.analyze(d, C).players.values()) for (const row of pl.techs) {
+          const end = Math.min(row.tActual == null ? d.duration : row.tActual, d.duration);
+          if (row.tBench == null || row.tBench >= end) continue;
+          const rows = E.series(d, C, pl.idx, row.id);
+          I.ecoWindows.push({ player: pl.idx, team: pl.team, name: pl.name, row, start: row.tBench, end, rows,
+            times: Float64Array.from(rows, (r) => r[0]) });
+        }
+      }
+      const result = [], actual = lanch.result.actual;
+      const winner = actual == null ? null : actual === "A" ? tA : tB;
+      for (const w of I.ecoWindows) {
+        if (!teams.includes(w.team) || w.start >= t1 || w.end <= t0) continue;
+        let missed = 0;
+        if (t0 >= w.end) missed = w.row.missed;
+        else if (t0 > w.start) {
+          const j = Fr.idxAt(w.times, t0), a = w.rows[j], b = w.rows[j + 1];
+          if (a) missed = !b || b[0] <= a[0] ? a[1] : a[1] + (b[1] - a[1]) * (t0 - a[0]) / (b[0] - a[0]);
+        }
+        let capitalizedBy = null;
+        for (const tm of teams) {
+          if (tm === w.team || I.ecoWindows.some((other) => other.team === tm && other.row.id === w.row.id && other.start < t1 && other.end > t0)) continue;
+          const firstAttack = pairs.find((p) => (p.at === tm && p.bt === w.team) || (p.at === w.team && p.bt === tm));
+          if (winner === tm || firstAttack && firstAttack.at === tm) { capitalizedBy = tm; break; }
+        }
+        result.push({ player: w.player, team: w.team, name: w.name, tech: w.row.id, techName: w.row.name,
+          start: w.start, end: w.end, overdue: Math.max(0, t0 - w.start), missed, capitalizedBy });
+      }
+      return result;
+    }
 
     // ── Micro Rating ──
     function ratings() {
@@ -398,15 +554,31 @@
         const lo = lowerBound(times, t0), hi = lowerBound(times, t1 + 1e-9);
         if (hi <= lo) continue;
         const dl = C.dmgOf.get(e.id);
-        let e0 = times[lo];
-        if (dl) for (const k of dl) if (C.dmgT[k] >= t0) { e0 = Math.min(e0, C.dmgT[k]); break; }
-        const e1 = Math.min(t1, e.died != null ? e.died : t1), dur = e1 - e0;
+        let e0 = Infinity, flags = 0;
+        for (let j = lo; j < hi; j++) {
+          const p = pos(e, times[j]);
+          if (inArea(p.x, p.z)) { e0 = Math.min(e0, times[j]); flags++; }
+        }
+        if (!flags) continue;
+        if (dl) for (const k of dl) {
+          const t = C.dmgT[k];
+          if (t < t0) continue;
+          if (t > t1) break;
+          const p = pos(e, t);
+          if (inArea(p.x, p.z)) { e0 = Math.min(e0, t); break; }
+        }
+        const e1 = Math.min(t1, e.died != null ? e.died : t1);
+        let dur = 0;
+        for (let t = e0; t < e1; t += SAMPLE) {
+          const p = pos(e, t);
+          if (Fr.alive(e, t) && inArea(p.x, p.z)) dur += Math.min(SAMPLE, e1 - t);
+        }
         if (dur < 3) continue;
         const tm = sideOf(e, e0);
         if (tm == null || !up[tm]) continue;
         const sa = Fr.statsAt(C, e, e0);
         if (!sa || !sa.period) continue;
-        const u = Math.min(1, ((hi - lo) * SAMPLE) / dur / clamp(UPTIME_FLAG_S / sa.period, 0.05, 1)), wgt = Math.max(1, valueOf(e)) * dur;
+        const u = Math.min(1, (flags * SAMPLE) / dur / clamp(UPTIME_FLAG_S / sa.period, 0.05, 1)), wgt = Math.max(1, valueOf(e)) * dur;
         const mainW = weaponsOf(sa)[0];
         up[tm].all.s += u * wgt; up[tm].all.w += wgt;
         if (mainW && mainW.ty === "ranged") { up[tm].ranged.s += u * wgt; up[tm].ranged.w += wgt; }
@@ -418,14 +590,42 @@
         if (!a || !SPLASH.test(a.bp)) continue;
         for (const bl of mine) {
           if (bl.t0 < t0 || bl.t0 > t1 || bl.guess) continue;
+          const p = pos(bl.b, Math.min(bl.t0, bl.b.died == null ? bl.t0 : bl.b.died - 0.001));
+          if (!inArea(p.x, p.z)) continue;
           const at = sideOf(a, bl.t0);
           if (at == null || !spl[at]) continue;
           const n = bl.miss ? 0 : 1 + (bl.splash ? bl.splash.victims.length : 0);
           spl[at].shots++; spl[at].targets += n; if (n >= 2) spl[at].multi++;
         }
       }
+      const micro = microInfo(C);
+      const focus = perTeam(() => ({ kills: 0, multi: 0 }));
+      for (const kill of micro.kills) if (kill.t >= t0 && kill.t <= t1 && inArea(kill.x, kill.z) && focus[kill.team]) {
+        focus[kill.team].kills++;
+        if (kill.multi) focus[kill.team].multi++;
+      }
+      const kite = perTeam(() => ({ shots: 0, moving: 0, gains: [], melee: false }));
+      // Applicability is melee present anywhere in the fight disc/window, not only within 8 m of a shot.
+      for (const m of micro.melee) {
+        const times = [t0, t1];
+        for (let j = lowerBound(m.t, t0); j < m.t.length && m.t[j] <= t1; j++) times.push(m.t[j]);
+        for (const t of times) {
+          if (!Fr.alive(m, t)) continue;
+          const p = pos(m, t), mt = sideOf(m, t);
+          if (mt == null || !inArea(p.x, p.z)) continue;
+          for (const tm of teams) if (tm !== mt) kite[tm].melee = true;
+        }
+      }
+      for (const shot of micro.shots) {
+        const k = kite[shot.team];
+        if (!k || shot.t < t0 || shot.t > t1 || !inArea(shot.x, shot.z)) continue;
+        k.shots++;
+        const prev = shot.previous, inside = prev && prev.t >= t0 && inArea(prev.x, prev.z);
+        if (inside && shot.moving && shot.distance <= 8) k.moving++;
+        if (inside && shot.chaseGain != null) k.gains.push(shot.chaseGain);
+      }
       for (const tm of teams) {
-        const comp = { priority: null, overkill: null, uptime: null, splash: null };
+        const comp = { priority: null, overkill: null, uptime: null, splash: null, focus: null, kiting: null, kitingChaseGain: null };
         const pr = prio[tm];
         if (pr.n) comp.priority = pr.sum / pr.n;
         const dl = dealt[tm] || 0;
@@ -435,12 +635,33 @@
         if (ub.w > 0) comp.uptime = ub.s / ub.w;
         const sp = spl[tm];
         if (sp.shots > 0) comp.splash = Math.min(1, sp.multi / sp.shots / SPLASH_REF);
+        const ff = focus[tm], kt = kite[tm];
+        if (ff.kills) comp.focus = ff.multi / ff.kills;
+        if (kt.shots && kt.melee) {
+          comp.kiting = kt.moving / kt.shots;
+          if (kt.gains.length) {
+            kt.gains.sort((a, b) => a - b);
+            const mid = kt.gains.length >> 1;
+            comp.kitingChaseGain = kt.gains.length % 2 ? kt.gains[mid] : (kt.gains[mid - 1] + kt.gains[mid]) / 2;
+          }
+        }
+        const pct = {
+          priority: percentile("priority", comp.priority), focus: null, kiting: null,
+          splash: percentile("splash", comp.splash), uptime: percentile("uptime", comp.uptime),
+        };
+        // A focus judgment needs actual kills; waste alone is not a substitute for coordinated finishing.
+        if (comp.focus !== null && comp.overkill !== null) pct.focus = 0.6 * percentile("focus", comp.focus) + 0.4 * percentile("overkill", comp.overkill);
+        if (comp.kiting !== null) {
+          pct.kiting = percentile("kiting", comp.kiting);
+          if (comp.kitingChaseGain !== null) pct.kiting = (pct.kiting + percentile("kitingChaseGain", comp.kitingChaseGain)) / 2;
+        }
         let sw = 0, sc = 0;
-        for (const key of Object.keys(W)) if (comp[key] !== null) { sw += W[key]; sc += W[key] * clamp(comp[key], 0, 1); }
-        const score = sw > 0 ? (100 * sc) / sw : null;
+        for (const key of Object.keys(W)) if (pct[key] !== null) { sw += W[key]; sc += W[key] * pct[key]; }
+        const score = sw > 0 ? sc / sw : null;
         res[tm] = {
-          score, letter: score === null ? null : Fr.letter(score / 100), components: comp, weights: W,
-          n: { pairs: pr.n, dealt: dl, wasted, wasteFinal: wasteN[tm].final, wasteShots: wasteN[tm].shots, uptimeBasis: ub.w > 0 ? basis : null, splashShots: sp.shots, splashMulti: sp.multi, splashTargets: sp.targets },
+          score, letter: score === null ? null : Fr.letter(score / 100), components: comp, weights: W, pct, version: 2,
+          n: { pairs: pr.n, dealt: dl, wasted, wasteFinal: wasteN[tm].final, wasteShots: wasteN[tm].shots, uptimeBasis: ub.w > 0 ? basis : null, splashShots: sp.shots, splashMulti: sp.multi, splashTargets: sp.targets,
+            focusKills: ff.multi, kills: ff.kills, rangedShots: kt.shots, movingNearMeleeShots: kt.moving, chaseGains: kt.gains.length },
         };
       }
       return res;

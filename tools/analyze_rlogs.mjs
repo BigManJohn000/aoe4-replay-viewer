@@ -10,7 +10,7 @@ import { spawnSync } from 'node:child_process';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DATA = path.join(ROOT, 'viewer/data');
 const OUT = path.join(ROOT, 'harvest/analysis');
-const VERSION = 5;
+const VERSION = 6;
 const MAY = 10307814;
 const TILE_METRES = 4; // statsAt.range is tiles; recorded positions and timing ranges are metres (model.js CONVERT_R).
 const scripts = ['units', 'stats', 'frame', 'model', 'fights', 'eco'].map(name =>
@@ -660,6 +660,7 @@ function analyze(name) {
     const { t0, t1, x, z } = a, radius = 1.5 * a.radius;
     const inArea = (px, pz) => Math.hypot(px - x, pz - z) <= radius;
     const winnerTeam = a.lanchester.actual === 'A' ? a.lanchester.A : a.lanchester.actual === 'B' && a.teams.length === 2 ? a.lanchester.B : null;
+    // Calibration reads raw components, never rating.pct; focus/kiting observations are computed independently below.
     const sides = Object.fromEntries(a.teams.map(team => [team, { team, won: winnerTeam == null ? null : team === winnerTeam,
       engagedValue: 0, components: { ...a.rating[team]?.components }, rangedShots: 0, movingNearMeleeShots: 0,
       chaseGains: {}, kills: 0, focusKills: 0 }]));
@@ -819,6 +820,7 @@ function aggregate(records) {
     let fights = 0, decided = 0, correct = 0, brierSum = 0, brierCount = 0, playerGames = 0;
     let mmrSum = 0, mmrCount = 0;
     const letters = {}, tagCounts = {};
+    const ratingHigherWins = { wins: 0, n: 0, ties: 0 };
     const healingOutcomes = Object.fromEntries(['high', 'low'].map(key => [key, { n: 0, wins: 0, withHealersN: 0, withHealersWins: 0 }]));
     for (const record of records) {
       const selected = record.players.filter(p => cohort === 'all' || p.cohort === cohort), ids = new Set(selected.map(p => p.idx));
@@ -840,6 +842,17 @@ function aggregate(records) {
         const l = fight.lanchester;
         if (typeof l?.correct === 'boolean') { decided++; if (l.correct) correct++; }
         if (finite(l?.probabilityA) && ['A', 'B'].includes(l.actual)) { brierSum += (l.probabilityA - (l.actual === 'A' ? 1 : 0)) ** 2; brierCount++; }
+        // Compare both v2 team scores once per participating cohort; score ties and unavailable scores are not in n.
+        if (fight.teams.length === 2 && ['A', 'B'].includes(l?.actual)) {
+          const a = fight.ratings?.[l.A], b = fight.ratings?.[l.B];
+          if (a?.version === 2 && b?.version === 2 && finite(a.score) && finite(b.score)) {
+            if (Math.abs(a.score - b.score) <= 1e-9) ratingHigherWins.ties++;
+            else {
+              ratingHigherWins.n++;
+              if ((a.score > b.score ? 'A' : 'B') === l.actual) ratingHigherWins.wins++;
+            }
+          }
+        }
         for (const tag of fight.tags || []) plus(tagCounts, tag.tag);
         // Heal-outcome groups include decided sides with known damage >0; additionally retain the subset with a healer present in the fight area.
         for (const [team, h] of Object.entries(fight.healingByTeam || {})) if (teams.has(+team) && h.healShare != null && typeof h.won === 'boolean') {
@@ -864,6 +877,7 @@ function aggregate(records) {
     result.cohorts[cohort] = { playerGames, meanMmr: ratio(mmrSum, mmrCount), mmrCount, units, siege: units.filter(r => r.siege), healers: units.filter(r => r.healer), counterMatrix: counterMatrix(records, cohort),
       fights: { count: fights, ratings: Object.fromEntries(Object.entries(scores.histograms).map(([k, bins]) => [k, distribution(bins)])), letters,
         lanchester: { decided, correct, accuracy: ratio(correct, decided), brier: ratio(brierSum, brierCount) }, tags: tagCounts,
+        ratingHigherWins: { ...ratingHigherWins, share: ratio(ratingHigherWins.wins, ratingHigherWins.n) },
         healingOutcomes: Object.fromEntries(Object.entries(healingOutcomes).map(([key, g]) => [key, { ...g, winRate: ratio(g.wins, g.n), withHealersWinRate: ratio(g.withHealersWins, g.withHealersN) }])) },
       eco: [...techs.values()].map(t => ({ ...t, skipRate: ratio(t.skipped, t.eligible), delayRate: ratio(t.delayed, t.eligible),
         meanMissedResources: ratio(t.missedSum, t.eligible), meanDeficit: ratio(t.deficitSum, t.eligible), meanDelaySeconds: ratio(t.delaySum, t.eligible),
@@ -973,9 +987,10 @@ const definitions = [
   'Healing uses C.heals inferred episodes (not regeneration): events, HP sum, HP / unioned per-healer healing seconds, and HP / healer alive-minutes. Received HP/events group by target type. Fight-event share requires temporal overlap; fight HP is time-prorated over union of d.fights windows, with no spatial filter.',
   'Per-fight healing impact prorates C.heals by temporal window overlap, team-wide, and divides by same-window team HP drops (also team-wide, no area filter). A healer type is present if alive inside 1.5*radius at a window endpoint or recorded position; typical share is median side-fight heal share where that owner/type is present. Win groups >=10% vs <10% exclude zero-damage/undecided sides; counts include all sides plus healer-present subset.',
   'Fights copy RV_FIGHTS outputs: per-team 0-100 score/components, Lanchester P(A)/prediction/actual/correct, recorded resource losses, tags. Tug final = side A killed value minus others; max swing = max difference - min difference including initial zero. Overlapping fights can share losses.',
-  'Viewer fight priority is mean target efficiency; overkill is 1-min(1,wasteShare/0.20) using calibrated killing surplus/dead-target shots; uptime normalises flags by 0.75/period, value-time weighted (ranged preferred); splash is multi-victim shot share/0.25 capped. Weights 35/25/25/15%, renormalised for absent components.',
-  'Calibration preserves four viewer components per fight/team; kitingMovingShare = ranged shots moving >0.5 m with nearest melee <=8 m / ranged shots inside time and 1.5*radius area, requiring previous shot also inside; kitingChaseGain is median eligible chase gain; focusFire = >=3-attacker credited kills / credited known-victim kills in area/window.',
+  'Viewer Micro Rating v2 scores 0-100 using calibrated component percentiles: priority 30%, focus 25%, kiting 15%, splash 15%, uptime 15%, renormalised for absent components. Focus percentile is 0.6*percentile(raw focus kill share)+0.4*percentile(raw overkill); kiting percentile is the mean of percentile(raw moving share) and percentile(raw chase gain) when measured. Raw components remain separate from rating.pct; existing rating letters remain compatible.',
+  'Calibration preserves raw priority/overkill/uptime/splash from viewer components, never their percentiles, and independently computes kitingMovingShare = ranged shots moving >0.5 m with nearest melee <=8 m / ranged shots inside time and 1.5*radius area, requiring previous shot also inside; kitingChaseGain is median eligible chase gain; focusFire = >=3-attacker credited kills / credited known-victim kills in area/window.',
   'Micro calibration percentiles use all finite side-fight values. Higher-component win rate uses decided two-team fights with both sides >=300 unique military value attacking/targeted/damaged in area/window, excludes component ties (n), and needs both finite components. Corr is point-biserial Pearson(value,win) over those paired sides including ties (corrN); descriptive, not causal or independent observations. Output: micro_calibration.json.',
+  'ratingHigherWins counts decided two-team fights won by the higher v2 score, once per participating cohort. Both team ratings must be version 2 with finite scores; score ties (within 1e-9) are counted separately and excluded from n. Share=wins/n, null when n=0; unlike raw-component calibration this comparison has no minimum engaged-value filter.',
   'Lanchester uses upgraded DPS vs enemy mix x current HP at fight start, P(A)=logistic(log(powerA/powerB)/1.5), bounded .01-.99; outcome is lower army+villager value loss (within 10% draws). Accuracy excludes draws/null; Brier is mean squared probability error on decided A/B fights.',
   'Eco copies RV_ECO: ontime/late/never/na; completion actual vs opponent-start-adjusted or own-age benchmark. Missed = delayed gatherer-seconds x base rate x incremental multiplier (Wheelbarrow trip model); never integrates to replay end. Deficit = missed - cost.',
   'Eco capitalized/evidence copies engine decision: constrained bank plus military spending AND tempo-window combat impact; not causal proof. Skip=never/eligible; delay=late/eligible (never separate); eligible excludes na/no benchmark. Mean missed/deficit/delay includes eligible on-time zeroes; capitalized share uses applies:true.',
@@ -1047,10 +1062,10 @@ function summary(a) {
     const h = all.fights.healingOutcomes[key];
     lines.push(`| ${key === 'high' ? '≥10%' : '<10%'} | ${h.wins} / ${h.n} | ${pct(h.winRate)} | ${h.withHealersWins} / ${h.withHealersN} | ${pct(h.withHealersWinRate)} |`);
   }
-  lines.push('', '## Fights', '| Cohort | Fights | Rating p25 / median / p75 | Lanchester correct / decided | Accuracy |', '|---|---:|---:|---:|---:|---:|');
+  lines.push('', '## Fights', '| Cohort | Fights | Rating p25 / median / p75 | ratingHigherWins (wins / n) | Higher-rating win share | Score ties | Lanchester correct / decided | Accuracy |', '|---|---:|---:|---:|---:|---:|---:|---:|---:|');
   for (const [key, c] of Object.entries(a.cohorts)) {
-    const r = c.fights.ratings.score, l = c.fights.lanchester;
-    lines.push(`| ${key} | ${c.fights.count} | ${fmt(r?.p25)} / ${fmt(r?.median)} / ${fmt(r?.p75)} | ${l.correct} / ${l.decided} | ${pct(l.accuracy)} |`);
+    const r = c.fights.ratings.score, l = c.fights.lanchester, h = c.fights.ratingHigherWins;
+    lines.push(`| ${key} | ${c.fights.count} | ${fmt(r?.p25)} / ${fmt(r?.median)} / ${fmt(r?.p75)} | ${h.wins} / ${h.n} | ${pct(h.share)} | ${h.ties} | ${l.correct} / ${l.decided} | ${pct(l.accuracy)} |`);
   }
   lines.push('', '## Eco (May vs rest)', '| Tech | May skip / rest | May late / rest | May missed / rest | May capitalized / rest |', '|---|---:|---:|---:|---:|---:|');
   for (const t of all.eco) {
@@ -1079,7 +1094,7 @@ for (const name of names) {
   } catch (error) { failed.add(name); log(`${name}: ERROR ${error.message}`); }
 }
 const records = [];
-for (const file of fs.readdirSync(OUT).filter(n => n.endsWith('.json') && !['aggregate.json', 'micro_calibration.json'].includes(n)).sort()) {
+for (const file of fs.readdirSync(OUT).filter(n => n.endsWith('.json') && !['aggregate.json', 'aggregate_v1.json', 'micro_calibration.json'].includes(n)).sort()) {
   if (failed.has(file.slice(0, -5))) continue;
   try {
     const r = JSON.parse(fs.readFileSync(path.join(OUT, file), 'utf8'));
