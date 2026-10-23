@@ -104,24 +104,24 @@
   const AREA = 1.5;                 // × fight.radius
   const STRENGTH_R = 2;             // × fight.radius, units counted in the Lanchester strength
   const W = { priority: 0.30, focus: 0.25, kiting: 0.15, splash: 0.15, uptime: 0.15 };
-  // harvest/analysis/micro_calibration.json, 211 recorded 2000+ MMR 1v1 games, 2026-10-23.
+  // harvest/analysis/micro_calibration.json, 211 recorded 2000+ MMR 1v1 games, 2026-10-23 (after the B08–B11/N1 fixes).
   //                    p10     p25     p50     p75      p90     higher wins   corr
-  // priority           .443    .6235   .805    .957     1       55.0%        +.096
-  // overkill           0       .634    1       1        1       36.3%        −.149
-  // uptime             .239    .374    .571    .779     .946    55.5%        +.073
-  // splash             0       0       .184    .667     1       75.0% (n24)  +.332
-  // moving share       0       0       0       .067     .197    48.3%        −.052
-  // chase gain (m)    −1.405   −.548    0       2.067    6.436   51.3%        −.002
-  // focus kill share   0       .2      .615    1        1       52.1%        +.054
+  // priority           .442    .621    .808    .962     1       55.1%        +.103
+  // overkill           0       .654    1       1        1       36.6%        −.146
+  // uptime             .241    .377    .572    .783     .946    55.5%        +.078
+  // splash             0       0       .129    .667     1       74.1% (n27)  +.323
+  // moving share       0       0       0       .065     .192    47.5%        −.054
+  // chase gain (m)    −1.386   −.516    0       2.129    6.382   51.6%        −.002
+  // focus kill share   0       .18     .6      1        1       52.5%        +.057
   // Descriptive, not causal: winners finish more focused kills, making waste control alone misleading.
   const CAL = {
-    priority: [0.443, 0.6235, 0.805, 0.957, 1],
-    overkill: [0, 0.634, 1, 1, 1],
-    uptime: [0.239, 0.374, 0.571, 0.779, 0.946],
-    splash: [0, 0, 0.184, 0.667, 1],
-    kiting: [0, 0, 0, 0.067, 0.197],
-    kitingChaseGain: [-1.4047, -0.5483, 0, 2.0673, 6.4363],
-    focus: [0, 0.2, 0.615, 1, 1],
+    priority: [0.442, 0.621, 0.808, 0.962, 1],
+    overkill: [0, 0.654, 1, 1, 1],
+    uptime: [0.241, 0.377, 0.572, 0.783, 0.946],
+    splash: [0, 0, 0.129, 0.667, 1],
+    kiting: [0, 0, 0, 0.065, 0.192],
+    kitingChaseGain: [-1.386, -0.5158, 0, 2.1285, 6.3815],
+    focus: [0, 0.18, 0.6, 1, 1],
   };
   const QUANTILES = [10, 25, 50, 75, 90];
   function percentile(key, raw) {

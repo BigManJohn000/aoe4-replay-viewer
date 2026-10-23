@@ -82,8 +82,10 @@ python\python.exe tools\convert.py recordings\<name>.rlog <replay.rec>   # re-co
 python\python.exe tools\trends.py                             # rebuild viewer/data/trends/games.js
 ```
 
-`Record replays.bat` records everything under `replays/` that has no complete recording yet. The output is
-`recordings/<name>.rlog` (raw records) and `viewer/data/<name>.js` (viewer data, listed in `viewer/data/index.js`).
+`Record replays.bat` records everything under `replays/` that has no complete recording yet. A recording counts as
+complete when its last sample is within 1.125 s of the replay's end (complete recordings end up to 1.0 s early); an
+incomplete one is kept but not converted, and retried on the next run. The output is `recordings/<name>.rlog` (raw
+records) and `viewer/data/<name>.js` (viewer data, listed in `viewer/data/index.js`, written by `convert.write_index()`).
 
 ## Using the viewers
 
@@ -157,7 +159,7 @@ The **Graphics** setting in the 3D viewer switches between High and Low (fast) q
 | `recorder/recorder.lua` | The in-game recorder script (record format documented in its header) |
 | `tools/recorder_app.py`, `.html` | Replay Recorder: the local page on 127.0.0.1:47811 |
 | `tools/record_replay.py`, `aoe4input.py` | Starts the game on a replay, types into its console in the background, fast-forwards, collects the log |
-| `tools/recfile.py` | `.rec` parser (build, players, map, train/build/research commands, abilities, player cameras) |
+| `tools/recfile.py` | `.rec` parser (build, players, map, train/build/research commands, abilities, player cameras, `orders()`: every command with queue flag, receivers and target) |
 | `tools/convert.py`, `rlog.py` | `.rlog` + `.rec` to viewer data: fights, kills, army value, techs, player cameras, conversions |
 | `tools/trends.py`, `fetch_replays.py`, `check_units.py` | Trends data, replay download, unit-class check after game updates |
 | `viewer/` | 2D viewer (Canvas 2D, no dependencies); `data/` holds the recordings both viewers read |
@@ -177,6 +179,9 @@ The **Graphics** setting in the 3D viewer switches between High and Low (fast) q
 
 `node viewer3d/tools/parity-check.mjs [name]` checks that the 3D viewer's replay model agrees with the 2D viewer's on
 a recording (exit code 0 = `parity OK`).
+
+Unit tests: `python -m unittest discover -s tools/tests -t .` (Python, standard library only) and
+`node --test tools/tests/*.test.mjs` (the shared viewer engines, loaded the way `tools/analyze_rlogs.mjs` loads them).
 
 ### Unit statistics
 

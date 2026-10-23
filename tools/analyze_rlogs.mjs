@@ -10,7 +10,7 @@ import { spawnSync } from 'node:child_process';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DATA = path.join(ROOT, 'viewer/data');
 const OUT = path.join(ROOT, 'harvest/analysis');
-const VERSION = 6;
+const VERSION = 7;
 const MAY = 10307814;
 const TILE_METRES = 4; // statsAt.range is tiles; recorded positions and timing ranges are metres (model.js CONVERT_R).
 const scripts = ['units', 'stats', 'frame', 'model', 'fights', 'eco'].map(name =>

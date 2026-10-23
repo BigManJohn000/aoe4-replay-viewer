@@ -157,36 +157,41 @@ Benchmarks = median completion seconds after the age-up (1 179 summaries; civ me
 - Castle arrival 2–5 min before the opponent: 61 % WR; 2–5 min after: 39 %. Feudal timing alone barely matters
   (47–52 %).
 
-## 8. Micro: what predicts winning a fight (211 recordings, 4 680 fights, 3 379 decided)
+## 8. Micro: what predicts winning a fight (211 recordings, 4 898 fights, 3 405 decided)
 
 | Component (per side per fight) | p25 | p50 | p75 | Higher side wins | n |
 |---|---:|---:|---:|---:|---:|
-| Target priority | .62 | .81 | .96 | 55.0 % | 2 579 |
-| Uptime | .37 | .57 | .78 | 55.5 % | 2 389 |
-| Focus fire (kills with ≥ 3 own-team attackers) | .20 | .62 | 1 | 52.1 % | 1 983 |
-| Kiting (shots while moving with melee ≤ 8 m) | 0 | 0 | .07 | 48.3 % | 1 036 |
-| Splash (multi-hit siege shots) | 0 | .18 | .67 | 75.0 % | 24 |
-| "Low overkill" alone | .63 | 1 | 1 | **36.3 %** | 1 958 |
+| Target priority | .62 | .81 | .96 | 55.1 % | 2 628 |
+| Uptime | .38 | .57 | .78 | 55.5 % | 2 431 |
+| Focus fire (kills with ≥ 3 own-team attackers) | .18 | .60 | 1 | 52.5 % | 2 007 |
+| Kiting (shots while moving with melee ≤ 8 m) | 0 | 0 | .07 | 47.5 % | 1 031 |
+| Splash (multi-hit siege shots) | 0 | .13 | .67 | 74.1 % | 27 |
+| "Low overkill" alone | .65 | 1 | 1 | **36.6 %** | 1 986 |
 
 - The old Micro Rating rewarded low overkill, but winners overkill more because they finish more kills. v2 judges
   waste together with focus fire.
-- Lanchester (square-law) fight prediction is right in 61.0 % of decided fights (2 062 / 3 379).
+- Lanchester (square-law) fight prediction is right in 60.8 % of decided fights (2 071 / 3 405).
 
 Micro Rating v2 (score = weighted 2000+ percentile, 50 = median side), calibrated on and applied to all 211
 recordings. v1 columns are from the 151-recording run.
 
 | Cohort | v1 p25 / median / p75 | v2 p25 / median / p75 | Higher v2 side won the fight |
 |---|---|---|---:|
-| All sides | 58.7 / 71.4 / 81.5 | 39.3 / 48.6 / 59.6 | 52.0 % (1 741 / 3 347) |
-| May sides / May games | 53.2 / 68.4 / 79.8 | 40.8 / 50.1 / 61.3 | 51.1 % (363 / 711) |
-| Rest sides / rest-only games | 59.7 / 71.9 / 81.7 | 39.1 / 48.5 / 59.5 | 52.3 % (1 378 / 2 636) |
+| All sides | 58.7 / 71.4 / 81.5 | 39.3 / 48.7 / 59.7 | 52.0 % (1 763 / 3 389) |
+| May sides / May games | 53.2 / 68.4 / 79.8 | 40.6 / 50.2 / 61.6 | 51.2 % (371 / 725) |
+| Rest sides / rest-only games | 59.7 / 71.9 / 81.7 | 39.1 / 48.6 / 59.5 | 52.3 % (1 392 / 2 664) |
 
 - v2 is centred where intended (median ≈ 49–50), so a grade now means "vs a 2000+ side", not "vs perfection". v1
   graded the median side B–A.
 - Micro explains little of who wins a fight: the better-micro side wins 52 %, while army strength (Lanchester) gets
   61 %. At 2000+ micro differences are small next to army size, composition and upgrades. The rating is a
   quality score, not a predictor.
-- May's sides score slightly above the rest (median 50.1 vs 48.5).
+- May's sides score slightly above the rest (median 50.2 vs 48.6).
+- Engine fixes after the run (audit B08–B11, N1; analysis schema 7) moved these numbers: fights 4 680 → 4 898
+  (hits after a quiet second were dropped from fight detection: +2.24 M damage HP, 23 % of all damage),
+  decided 3 379 → 3 405, Lanchester 61.0 % → 60.8 %, higher-v2 side 52.0 % → 52.0 % (1 741 / 3 347 →
+  1 763 / 3 389), v2 median 48.6 → 48.7. Component percentiles shifted by ≤ .06 (splash p50 .18 → .13);
+  CAL in `viewer/fights.js` was recalibrated on the new values. Conclusions unchanged.
 
 ## 9. 2D viewer upgrades (this run)
 
