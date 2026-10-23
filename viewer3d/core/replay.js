@@ -402,8 +402,6 @@ export class Replay {
     this.ageT = new Map([...this.players.keys()].map((k) => [k, []]));
     for (const [t, p, , type] of d.techs ?? []) if (type === 'age') this.ageT.get(p)?.push(t);
     for (const a of this.ageT.values()) a.sort((x, y) => x - y);
-    this.techs = d.techs ?? [];
-    this.stats = new Map(Object.entries(d.stats ?? {}).map(([idx, rows]) => [+idx, { t: Float64Array.from(rows, (r) => r[0]), rows }]));
     // each player's camera (convert.py camera_tracks): sample times, eyes (x, y, z per sample), orientation indices
     this.cameras = new Map(Object.entries(d.cameras ?? {}).map(([idx, c]) => {
       const n = c.track.length / 5, k = Array.from({ length: n }, (_, i) => 5 * i);

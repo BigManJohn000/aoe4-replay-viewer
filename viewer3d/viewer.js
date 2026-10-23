@@ -1,8 +1,9 @@
 /**
  * viewer.js — Age of Empires IV 3D replay viewer (Three.js ES module, loaded by index.html).
  *
- * Game facts come from core/ (no Three.js, no DOM): core/replay.js is the replay model, core/analysis.js the panel
- * queries ported from the 2D viewer; `node tools/parity-check.mjs [name]` checks both against the 2D viewer's model.
+ * Game facts come from core/ (no Three.js, no DOM): core/replay.js is the replay model; the Players tab queries the
+ * shared model.js (RV.statsAt/armyAt/techTable/killFeed/jumpFight) over M2, the 2D viewer's model of the same
+ * recording. `node tools/parity-check.mjs [name]` checks the core model against the 2D one.
  * This file renders and animates what they report and runs the UI; one clock (state.t) drives both, and
  * Replay.updateFrame(t) runs once per frame before anything reads the entities.
  *
@@ -84,7 +85,6 @@ import {
   Replay, idxAt, alive, ownerAt, place, tripAt, visibleTo, locateGaia, workersAt, wallAt, prettyCiv, fmtTime, clamp, hash01, hash3,
   SAMPLE, ROMAN, TAU, JOBS, J_FARM, J_WOOD, CARRY, HOLD,
 } from './core/replay.js';
-import { statsAt, armyAt, techTable, killFeed, jumpFight } from './core/analysis.js';
 import { initPortal, openMatches, showNotice } from './portal.js';
 import { Marks } from './marks.js';
 import { Legend, ArmyComp, UnitLabels, Moments } from './panels.js';
@@ -306,7 +306,6 @@ const ADAPT_NEAR = 60, ADAPT_FAR = 280; // adaptive unit scale: true size at ≤
 // (sampled 197,218,225); cloud drift per replay second
 const SKY_SIZE = 3000, SKY_GAIN = 0.12, SKY_FOG = '#c5dae1', SKY_CLOUD_RATE = 1;
 const SPEEDS = [0.25, 0.5, 1, 2, 4, 8, 16, 32]; // the 2D viewer's playback speeds
-const FIGHT_LEAD = 3;          // a fight is shown from this many seconds before its start
 const KILL_FEED = 25;          // kill feed length (the 2D viewer's)
 const CAT_LABELS = {
   villager: 'Villagers', cavalry: 'Cavalry', infantry: 'Infantry', ranged: 'Ranged', religious: 'Religious', siege: 'Siege',
@@ -4132,9 +4131,9 @@ function pruneSelection() {
   if (selection.size !== n) afterSelection();
 }
 
-/** Show a fight (Engagements list, [ / ] keys): from FIGHT_LEAD s before its start, framed on its area. */
+/** Show a fight (Engagements list, [ / ] keys): from RV.FIGHT_LEAD s before its start, framed on its area. */
 function focusFight(f) {
-  seek(f.start - FIGHT_LEAD);
+  seek(f.start - RV.FIGHT_LEAD);
   state.follow = false;
   focusOn(f.x, f.z, Math.max(70, f.radius * 6));
   renderFightPanel(f);
@@ -4338,7 +4337,8 @@ function renderFightPanel(f) {
 // players panel: the 2D viewer's numbers (banked resources, pop, army series), age-up/eco tech table, kill feed
 const fmtK = (v) => (v >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(Math.round(v)));
 const STAT_ROWS = ['Food', 'Wood', 'Gold', 'Stone', 'Pop', 'Villagers', 'Army', 'Army value'];
-const TECHS = techTable(R);
+// Players tab facts come from the shared model.js queries over M2, the 2D viewer's model of this recording
+const TECHS = RV.techTable(M2);
 // more than 4 players (3v3, 4v4) don't fit a label column beside theirs: each row's label goes on its own line
 const MANY = TEAM_ORDER.length > 4;
 const TEAM_SEP = TEAM_ORDER.map((p, j) => j > 0 && p.team !== TEAM_ORDER[j - 1].team); // a rule between teams
@@ -4378,9 +4378,10 @@ let statsKey = '', techKey = '', killTop = null;
 }
 function renderPlayers(t, fresh) {
   // one column per player, so 2v2 fits the side column
+  const army = RV.armyAt(M2, t);
   const vals = TEAM_ORDER.map((p) => {
-    const st = statsAt(R, p.idx, t), a = armyAt(R, p.idx, t);
-    return [st?.food, st?.wood, st?.gold, st?.stone, st?.pop, a?.villagers, a?.military, a?.value == null ? null : fmtK(a.value)]
+    const st = RV.statsAt(M2, p.idx, t), a = army.get(p.idx);
+    return [st?.[1], st?.[2], st?.[3], st?.[4], st?.[5], a?.villagers, a?.military, a == null ? null : fmtK(a.armyValue)]
       .map((v) => (v == null ? '–' : MANY && typeof v === 'number' ? fmtK(v) : String(v)));
   });
   const sk = vals.join('|');
@@ -4405,7 +4406,7 @@ function renderPlayers(t, fresh) {
     }))) : '<div class="empty">No techs recorded</div>';
   }
   // kill feed: the list is fixed by its newest kill
-  const ks = killFeed(R, t, KILL_FEED), top = ks.length ? ks[0] : -1;
+  const ks = RV.killFeed(M2, t, KILL_FEED), top = ks.length ? ks[0] : -1; // M2.kills and R.kills share one order
   if (top === killTop) return;
   const grew = fresh && killTop !== null && top > killTop;
   killTop = top;
@@ -5017,7 +5018,7 @@ window.addEventListener('keydown', (ev) => {
   } else if (ev.key === '+' || ev.key === '=' || ev.code === 'NumpadAdd') stepSpeed(1);
   else if (ev.key === '-' || ev.key === '_' || ev.code === 'NumpadSubtract') stepSpeed(-1);
   else if (ev.code === 'BracketLeft' || ev.code === 'BracketRight') {
-    const f = jumpFight(R.fights, state.t, ev.code === 'BracketRight' ? 1 : -1, FIGHT_LEAD);
+    const f = RV.jumpFight(R.fights, state.t, ev.code === 'BracketRight' ? 1 : -1);
     if (f) focusFight(f);
   } else if (ev.code === 'KeyF' && state.selected && canFollow(state.selected)) { state.follow = !state.follow; renderInspector(true); }
   else if (ev.code === 'Escape') { if ($('trendsModal').classList.contains('open')) showTrends(false); else { moments?.close(); select(null); } }

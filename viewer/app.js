@@ -149,7 +149,7 @@
   };
   S.focusFight = f => {
     S.fight = f;
-    S.seek(Math.max(0, f.start - 5));
+    S.seek(Math.max(0, f.start - RV.FIGHT_LEAD));
     map.focus(f.x, f.z, f.radius);
     S.speedIdx = SPEEDS.indexOf(1);
     S.playing = true;
@@ -390,12 +390,8 @@
   }
 
   function jumpFight(dir) {
-    const fs = M.fights;
-    if (!fs.length) return;
-    let f;
-    if (dir > 0) f = fs.find(x => x.start > S.t + 1) || fs[fs.length - 1];
-    else f = [...fs].reverse().find(x => x.start < S.t - 6) || fs[0];
-    S.focusFight(f);
+    const f = RV.jumpFight(M.fights, S.t, dir);
+    if (f) S.focusFight(f);
   }
 
   // Below 1100 px the sidebar is an overlay drawer; only Panels opens it, so map clicks never cover the map.
@@ -725,11 +721,8 @@
 
     const feed = $("#killFeed");
     feed.textContent = "";
-    const hi = RV.idxAt(M.killT, S.t);
-    let shown = 0;
-    for (let j = hi; j >= 0 && shown < 25; j--) {
+    for (const j of RV.killFeed(M, S.t, 25)) {
       const k = M.kills[j], v = M.byId.get(k.victim);
-      if (!v || v.cat === "livestock" || v.cat === "attachment") continue;
       const kl = k.killer != null ? M.byId.get(k.killer) : null;
       const vp = M.playerByIdx.get(v.owner), kp = kl ? M.playerByIdx.get(kl.owner) : null;
       feed.append(h("div", { class: "kill", style: { cursor: "pointer" }, onclick: () => { S.seek(k.t - 3); map.focus(...posAt(v, k.t), 30); } },
@@ -737,7 +730,6 @@
         kl ? h("span", { style: { color: kp ? kp.color : "#aaa" } }, RV.nameAt(kl, k.t)) : h("span", { class: "muted" }, "?"),
         " killed ",
         h("span", { style: { color: vp ? vp.color : "#aaa" } }, RV.nameAt(v, k.t))));
-      shown++;
     }
   }
 
@@ -774,19 +766,12 @@
 
   // Age-ups and eco techs: one row per tech, one column per player; earliest time highlighted, future times dimmed.
   function techTable() {
-    const rows = new Map();
-    for (const [t, idx, label, kind] of M.techs) {
-      if (!rows.has(label)) rows.set(label, { kind, at: new Map() });
-      const r = rows.get(label);
-      if (!r.at.has(idx)) r.at.set(idx, t);
-    }
-    const grid = [...rows].map(([label, r]) => {
-      const best = Math.min(...r.at.values());
-      return { label, cls: r.kind === "age" ? "age" : "", cells: M.players.map(p => {
+    const grid = RV.techTable(M).map(r => ({
+      label: r.label, cls: r.kind === "age" ? "age" : "", cells: M.players.map(p => {
         const t = r.at.get(p.idx);
-        return { v: t == null ? "–" : RV.fmtTime(t), cls: t == null ? "muted" : t > S.t ? "future" : t === best ? "best" : "", title: t == null ? "not researched" : RV.fmtTime(t) };
-      }) };
-    });
+        return { v: t == null ? "–" : RV.fmtTime(t), cls: t == null ? "muted" : t > S.t ? "future" : t === r.best ? "best" : "", title: t == null ? "not researched" : RV.fmtTime(t) };
+      }),
+    }));
     return h("div", {}, h("h4", {}, "Age-ups and eco upgrades"), playerGrid(grid, "techs"),
       h("p", { class: "muted" }, "Green = first player to get it. Dimmed = not researched yet at the current time."));
   }

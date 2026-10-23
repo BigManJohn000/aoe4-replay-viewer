@@ -35,7 +35,6 @@ const data = REPLAY_DATA?.[NAME];
 if (!data) throw new Error(`${NAME}: no REPLAY_DATA in ${VIEWER_2D}/data/${NAME}.js`);
 
 const core = await import(pathToFileURL(path.join(PROJECT, 'core', 'replay.js')).href);
-const ana = await import(pathToFileURL(path.join(PROJECT, 'core', 'analysis.js')).href);
 const M = RV.prepare(structuredClone(data));
 const R = new core.Replay(structuredClone(data), RV_UNITS, RV_FRAME);
 const V3 = RV_FRAME.controller(R.combat);
@@ -54,26 +53,11 @@ const near = (check, a, b, detail) => { checks++; if (!(Math.abs(a - b) <= 1e-4)
 // --- static facts ---
 same('entities', M.ents.length, R.ents.length, 'entity count');
 M.ents.forEach((a, i) => same('entities', a.id, R.ents[i]?.id, `entity ${i} id`));
+// Both Players tabs query model.js (RV.statsAt/armyAt/techTable/killFeed) over the 2D model; 3D renders the kill
+// feed's indices from R.kills, so the two kill lists must keep one order.
 same('kills', M.kills.length, R.kills.length, 'kill count');
 M.kills.forEach((k, i) => same('kills', `${k.t}|${k.victim}|${k.killer}`, `${R.kills[i]?.t}|${R.kills[i]?.victim}|${R.kills[i]?.killer}`, `kill ${i}`));
 M.ents.forEach((a, i) => same('gate fix', a.bp, R.ents[i].bp, `entity ${a.id} bp`));
-
-// 2D app.js techTable (first research per player; best = earliest)
-const techs2 = new Map();
-for (const [t, idx, label, kind] of M.techs) {
-  if (!techs2.has(label)) techs2.set(label, { kind, at: new Map() });
-  const r = techs2.get(label);
-  if (!r.at.has(idx)) r.at.set(idx, t);
-}
-const techs3 = ana.techTable(R);
-same('tech table', [...techs2.keys()].join('|'), techs3.map((r) => r.label).join('|'), 'rows');
-for (const r3 of techs3) {
-  const r2 = techs2.get(r3.label);
-  if (!r2) continue;
-  same('tech table', r2.kind, r3.kind, `${r3.label} kind`);
-  same('tech table', Math.min(...r2.at.values()), r3.best, `${r3.label} best`);
-  for (const p of data.players) same('tech table', r2.at.get(p.idx), r3.at.get(p.idx), `${r3.label} p${p.idx}`);
-}
 
 // shared combat index (frame.js RV_FRAME.combat) over each viewer's entity table
 const C2 = M.combat, C3 = R.combat;
@@ -136,21 +120,6 @@ for (let s = 0; s < STEPS; s++) {
     same('name', RV.nameAt(a, t).replace(/ I$/, '').replace(/\b(Tech|Defense|Viz|Resource) /g, ''), R.nameAt(b, t), who);
     if (b.isUnit && !b.followsAge) same('tier', RV.tierAt(a, t) || 1, R.tierAt(b, t), who);
   }
-  for (const p of data.players) {
-    const s2 = RV.statsAt(M, p.idx, t), s3 = ana.statsAt(R, p.idx, t);
-    same('stats', s2 ? s2.slice(1, 6).join(',') : null, s3 ? [s3.food, s3.wood, s3.gold, s3.stone, s3.pop].join(',') : null, `${at} p${p.idx}`);
-    // 2D app.js renderPlayers army columns
-    const a2 = M.army.players[String(p.idx)] || {}, k = Math.min(Math.floor(t / M.army.step), (a2.military || []).length - 1), a3 = ana.armyAt(R, p.idx, t);
-    same('army', `${a2.villagers?.[k]}|${a2.military?.[k]}|${a2.armyValue?.[k]}`, `${a3?.villagers}|${a3?.military}|${a3?.value}`, `${at} p${p.idx}`);
-  }
-  // 2D app.js kill feed: newest first, up to 25, no livestock/attachments
-  const feed2 = [];
-  for (let j = RV.idxAt(M.killT, t); j >= 0 && feed2.length < 25; j--) {
-    const v = M.byId.get(M.kills[j].victim);
-    if (!v || v.cat === 'livestock' || v.cat === 'attachment') continue;
-    feed2.push(j);
-  }
-  same('kill feed', feed2.join(','), ana.killFeed(R, t, 25).join(','), at);
   // FrameRenderState lists (frame.js controller) at t
   const f2 = M.view.frame(t), f3 = V3.frame(t);
   const list = (S) => [

@@ -624,6 +624,49 @@ window.RV = window.RV || {};
     return i < 0 ? null : s.rows[i];
   };
 
+  // Panel queries both viewers call on this model (the 3D page builds it as M2), so the Players tab, the tech table,
+  // the kill feed and the [ / ] fight jump cannot drift between them.
+
+  /** Seconds before its start that both viewers show a fight from (fight list, [ / ] keys). */
+  RV.FIGHT_LEAD = 5;
+
+  /**
+   * Age-ups and eco upgrades: one row per tech label in first-research order, with each player's first research time
+   * (at: Map idx → t) and the earliest of them (best).
+   */
+  RV.techTable = function (M) {
+    const rows = new Map();
+    for (const [t, idx, label, kind] of M.techs) {
+      if (!rows.has(label)) rows.set(label, { label, kind, at: new Map(), best: Infinity });
+      const r = rows.get(label);
+      if (!r.at.has(idx)) { r.at.set(idx, t); r.best = Math.min(r.best, t); }
+    }
+    return [...rows.values()];
+  };
+
+  /** Indices into M.kills of the latest kills up to t, newest first, leaving out livestock and attachments. */
+  RV.killFeed = function (M, t, max) {
+    const out = [];
+    for (let i = RV.idxAt(M.killT, t); i >= 0 && out.length < max; i--) {
+      const v = M.byId.get(M.kills[i].victim);
+      if (!v || v.cat === "livestock" || v.cat === "attachment") continue;
+      out.push(i);
+    }
+    return out;
+  };
+
+  /**
+   * The fight to jump to from t ([ / ] keys), shown from RV.FIGHT_LEAD s before its start. Next: the first fight whose
+   * lead-in is still ahead (else the last). Previous: the last fight started more than 6 s before t, so pressing it
+   * during a fight restarts that fight and pressing it again goes further back (else the first). null without fights.
+   */
+  RV.jumpFight = function (fights, t, dir) {
+    if (!fights.length) return null;
+    if (dir > 0) return fights.find(f => f.start - RV.FIGHT_LEAD > t + 0.5) || fights[fights.length - 1];
+    for (let i = fights.length - 1; i >= 0; i--) if (fights[i].start < t - 6) return fights[i];
+    return fights[0];
+  };
+
   // Explored ground for fog of war: per EXPLORE_CELL cell, the first time any unit or building of the players in mask
   // had it in sight (Infinity: never). Built from each entity's recorded positions, stamping its sight circle again
   // only after it moved a cell; cached per player, teams take the earliest of their members.
