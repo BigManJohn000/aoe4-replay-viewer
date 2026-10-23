@@ -104,8 +104,9 @@ API was found, so the recorder still uses `Squad_Count`; partially spawned squad
 Sample failures reset entity/destination/quote caches, and repeated live `N` records resynchronize existing entities.
 
 Replay downloads are parsed before atomic publication, with the replay build stored in the catalog. Invalid
-responses are quarantined as `.rec.bad` and marked retryable (`status = -2`); invalid existing downloads are fetched
-again. Harvest schema initialization installs indexes on summary/replay status and game patch/start time.
+responses are quarantined as `.rec.bad` and marked retryable (`status = -2`), retried at most once a day so a
+permanently broken replay does not take a download slot on every run; invalid existing downloads are fetched again.
+Harvest schema initialization installs indexes on summary/replay status and game patch/start time.
 
 ## Using the viewers
 
@@ -140,8 +141,10 @@ Links can name a match and a time: `index.html#aoe4_245598603/t1280` opens 21:20
 In 2D, resizing the map or toggling the caster dock preserves camera framing, including moment-link focus.
 Focused controls keep their native keyboard actions (Space opens Combat/Layers instead of toggling playback).
 Below 1100 px, the 2D player strips stack, **HUD details** expands resource/research columns, and **Panels** opens
-the sidebar as a drawer; the timeline retains its own height. Both viewers anchor playback to elapsed wall time,
-so slow frames do not slow the replay; changing tab visibility re-anchors the clock without a hidden-tab jump.
+the sidebar as a drawer over a dimmed map (only Panels opens it; ×, a click on the map or `Esc` closes it), and the
+Combat/Layers menus flip left-aligned when the wrapped toolbar puts them near the left edge; the timeline retains its
+own height. Both viewers anchor playback to elapsed wall time, so slow frames do not slow the replay; changing tab
+visibility re-anchors the clock without a hidden-tab jump.
 Paused 3D skips scene updates and rendering until input, camera damping, a seek or an asset completion changes the
 view. Toast fades and other CSS/timer-driven HUD effects still run, and seeking clears under-attack notices.
 The 3D FPS readout uses unclamped frame intervals and includes p95 frame milliseconds.

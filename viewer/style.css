@@ -236,7 +236,7 @@ footer { border-top: 1px solid #262c38; display: flex; flex-direction: column; m
   .caster-civ::before { content: ""; }
 }
 
-#sidebarToggle, #hudDetails { display: none; }
+#sidebarToggle, #hudDetails, #sideClose, #sideBackdrop { display: none; }
 @media (max-width: 1100px) {
   #top { flex-wrap: wrap; gap: 5px 8px; }
   #top #players { order: 2; flex-basis: 100%; flex-wrap: wrap; white-space: normal; overflow: visible; }
@@ -247,6 +247,9 @@ footer { border-top: 1px solid #262c38; display: flex; flex-direction: column; m
   main { position: relative; grid-template-columns: minmax(0, 1fr); }
   #side { display: none; position: absolute; right: 0; top: 0; bottom: 0; width: min(410px, 90vw); z-index: 8; box-shadow: -8px 0 20px #0008; }
   body.side-open #side { display: flex; }
+  #sideClose { display: block; flex: 0 0 auto; order: 1; padding: 8px 12px; font-size: 16px; line-height: 1; }
+  #sideBackdrop { position: absolute; inset: 0; z-index: 7; background: #0006; }
+  body.side-open #sideBackdrop { display: block; }
   #casterHud { height: auto; grid-template-columns: minmax(0, 1fr) 180px; }
   .caster-side, .caster-side-1 { grid-column: 1; grid-template-columns: minmax(0, 1fr) 110px; grid-template-rows: 40px; padding: 4px 8px; }
   .caster-side-0 { grid-row: 1; }

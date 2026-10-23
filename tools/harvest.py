@@ -223,13 +223,19 @@ def cmd_summaries(con: sqlite3.Connection, a: argparse.Namespace) -> None:
     status(con, a)
 
 
+INVALID_RETRY = dt.timedelta(days=1)  # an invalid download (-2) is retried at most once per day, not on every run
+
+
 def cmd_replays(con: sqlite3.Connection, a: argparse.Namespace) -> None:
     """The best eligible games (May's first, then highest MMR) with a summary and no replay yet, 10-40 min long."""
+    retry_after = (dt.datetime.now() - INVALID_RETRY).isoformat(timespec="seconds")
     rows = con.execute(
         f"select g.game_id, g.p0 from games g join summaries s using (game_id) where s.status = 200 and {eligible_sql(a)} "
         f"and g.duration between 600 and 2400 "
-        f"and g.game_id not in (select game_id from replays where status between 200 and 499) "
-        f"order by (g.p0 = {MAY} or g.p1 = {MAY}) desc, (g.p0_mmr + g.p1_mmr) desc limit ?", (a.count,)).fetchall()
+        f"and g.game_id not in (select game_id from replays where status between 200 and 499 "
+        f"or (status = -2 and fetched_at > ?)) "
+        f"order by (g.p0 = {MAY} or g.p1 = {MAY}) desc, (g.p0_mmr + g.p1_mmr) desc limit ?",
+        (retry_after, a.count)).fetchall()
     REPLAYS.mkdir(parents=True, exist_ok=True)
     for n, (gid, pid) in enumerate(rows, 1):
         status_code = download_replay(con, gid, pid, a.pause)

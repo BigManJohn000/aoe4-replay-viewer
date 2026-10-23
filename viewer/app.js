@@ -256,6 +256,11 @@
       close();
       menu.hidden = !open;
       button.setAttribute("aria-expanded", String(open));
+      // Right-aligned by default; flip to left-aligned when a wrapped toolbar leaves the button near the left edge.
+      if (open) {
+        menu.style.left = menu.style.right = "";
+        if (menu.getBoundingClientRect().left < 4) { menu.style.right = "auto"; menu.style.left = "0"; }
+      }
     });
     $("#top").addEventListener("change", updateOptionMenus);
     document.addEventListener("click", ev => { if (!ev.target.closest(".option-menu")) close(); });
@@ -280,15 +285,14 @@
     $("#fightSort").onchange = buildFightList;
     bindOptionMenus();
     bindCompass();
-    $("#sidebarToggle").onclick = () => {
-      const open = document.body.classList.toggle("side-open");
-      $("#sidebarToggle").setAttribute("aria-expanded", String(open));
-    };
+    $("#sidebarToggle").onclick = () => setSide(!document.body.classList.contains("side-open"));
+    $("#sideClose").onclick = () => setSide(false);
+    $("#sideBackdrop").onclick = () => setSide(false);
     $("#hudDetails").onclick = () => {
       const open = document.body.classList.toggle("hud-details");
       $("#hudDetails").setAttribute("aria-expanded", String(open));
     };
-    for (const b of document.querySelectorAll(".tabs button")) b.onclick = () => switchTab(b.dataset.tab);
+    for (const b of document.querySelectorAll(".tabs button[data-tab]")) b.onclick = () => switchTab(b.dataset.tab);
     window.addEventListener("keydown", ev => {
       if (ev.key !== "Escape" && ev.target.closest("button, input, select, textarea, [contenteditable]")) return;
       const step = ev.shiftKey ? 30 : 5;
@@ -305,7 +309,9 @@
         case "f": case "F": if (S.selected) { S.follow = !S.follow; S.dirty = true; renderUnit(true); } break;
         case "k": case "K": showKey($("#legend").hidden); break;
         case "h": case "H": $("#optCaster").click(); break;
-        case "Escape": S.select(null); S.fight = null; renderFightDetail(); highlightFightList(); closeCaption(); break;
+        case "Escape":
+          if (document.body.classList.contains("side-open")) { setSide(false); break; }
+          S.select(null); S.fight = null; renderFightDetail(); highlightFightList(); closeCaption(); break;
         default: return;
       }
       ev.preventDefault();
@@ -392,11 +398,13 @@
     S.focusFight(f);
   }
 
+  // Below 1100 px the sidebar is an overlay drawer; only Panels opens it, so map clicks never cover the map.
+  function setSide(open) {
+    document.body.classList.toggle("side-open", open);
+    $("#sidebarToggle").setAttribute("aria-expanded", String(open));
+  }
+
   function switchTab(name) {
-    if (matchMedia("(max-width: 1100px)").matches) {
-      document.body.classList.add("side-open");
-      $("#sidebarToggle").setAttribute("aria-expanded", "true");
-    }
     for (const b of document.querySelectorAll(".tabs button")) b.classList.toggle("active", b.dataset.tab === name);
     for (const s of document.querySelectorAll("#side section")) s.hidden = s.id !== "tab-" + name;
     if (name === "players") renderPlayers();
