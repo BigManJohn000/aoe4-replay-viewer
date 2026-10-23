@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>AoE4 Replay Viewer</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header id="top">
+    <select id="replay" title="Recording"></select>
+    <a href="trends.html" title="One player's numbers across every recorded match: what their wins and losses look like">Trends</a>
+    <div id="players"></div>
+    <div class="spacer"></div>
+    <label>Vision <select id="view"></select></label>
+    <label><input type="checkbox" id="optAttacks" checked> Attacks</label>
+    <label title="Colour attack lines by target choice: green good (the best target in reach), yellow ok, red poor"><input type="checkbox" id="optHeat"> Target fire</label>
+    <label title="Projectiles, siege arcs and muzzle flashes, splash rings, heals and floating damage numbers"><input type="checkbox" id="optFx" checked> Combat FX</label>
+    <label><input type="checkbox" id="optTrails" checked> Trails</label>
+    <label><input type="checkbox" id="optOrders" checked> Orders</label>
+    <label><input type="checkbox" id="optEcoOrders"> Eco orders</label>
+    <label><input type="checkbox" id="optLabels"> Labels</label>
+    <label title="Elevation shading and contour lines"><input type="checkbox" id="optTerrain" checked> Relief</label>
+    <label title="Forests, mines, berries, animals, relics, sacred sites"><input type="checkbox" id="optResources" checked> Resources</label>
+    <label title="Panel counting each player's units inside the current view"><input type="checkbox" id="optComp" checked> Army comp</label>
+    <label title="The ground each player's screen showed, from the replay's camera records (16:9 screen assumed)"><input type="checkbox" id="optCams"> Cameras</label>
+    <label title="The map key: what each icon, line and mark means (K)"><input type="checkbox" id="optLegend" checked> Key</label>
+  </header>
+
+  <main>
+    <div id="mapWrap">
+      <canvas id="map"></canvas>
+      <div id="tooltip" hidden></div>
+      <div id="notice" hidden></div>
+      <div id="caption" hidden></div>
+      <div id="legend">
+        <div class="lhead"><b>Map key</b><button id="legendHide" title="Hide the key (K)">Hide &times;</button></div>
+        <div class="lrow" id="legendUnits" hidden></div>
+        <div class="lrow" id="legendBuildings" hidden></div>
+        <div class="lrow" id="legendMap" hidden></div>
+        <div class="lrow" id="legendMarks" hidden></div>
+      </div>
+      <button id="legendShow" hidden title="Show the map key (K)">Show key</button>
+      <div id="comp" hidden></div>
+      <button id="compass" type="button" aria-label="Compass: turn the map" title="Compass: the N points to the map's north. Drag it (or focus it and press ←/→, Shift for 45°) to turn the map; click it (Enter, Space) to turn the map back to the in-game view">
+        <svg viewBox="-24 -24 48 48"><g id="compassRose"><path class="cn" d="M0 -12 L3.6 0 L-3.6 0 Z"/><path class="cs" d="M0 12 L3.6 0 L-3.6 0 Z"/><circle r="1.6"/></g><text id="compassN" y="3.8">N</text></svg>
+      </button>
+    </div>
+    <aside id="side">
+      <nav class="tabs">
+        <button data-tab="moments" hidden>Moments</button>
+        <button data-tab="fights" class="active">Fights</button>
+        <button data-tab="players">Players</button>
+        <button data-tab="eco" title="Eco opportunity cost: what late villager upgrades cost in missed resources, and whether the delay bought tempo">Eco</button>
+        <button data-tab="unit">Selection</button>
+      </nav>
+      <section id="tab-moments" hidden>
+        <h4 id="momentsTitle"></h4>
+        <div id="momentList"></div>
+      </section>
+      <section id="tab-fights">
+        <div id="fightDetail"></div>
+        <div class="listHead">
+          <span id="fightCount"></span>
+          <select id="fightSort"><option value="time">by time</option><option value="value">by size</option></select>
+        </div>
+        <div id="fightList"></div>
+      </section>
+      <section id="tab-players" hidden>
+        <div id="playerStats"></div>
+        <h4>Recent kills</h4>
+        <div id="killFeed"></div>
+      </section>
+      <section id="tab-eco" hidden>
+        <div id="ecoPanel"></div>
+      </section>
+      <section id="tab-unit" hidden>
+        <div id="unitCard"><p class="muted">Click a unit or building on the map.</p></div>
+      </section>
+    </aside>
+  </main>
+
+  <footer>
+    <div id="controls">
+      <button id="play" title="Space">Play</button>
+      <button id="back" title="Left arrow">-5s</button>
+      <button id="fwd" title="Right arrow">+5s</button>
+      <button id="slower" title="-">&minus;</button>
+      <span id="speed">1x</span>
+      <button id="faster" title="+">+</button>
+      <span id="clock">0:00</span>
+      <button id="watchGame" title="Open Age of Empires IV on this replay at the moment and place shown here">Watch in game</button>
+      <select id="metric">
+        <option value="armyValue">Army value (resources)</option>
+        <option value="military">Military units</option>
+        <option value="villagers">Villagers</option>
+      </select>
+      <span class="hint">Space play &middot; &larr;/&rarr; 5s (Shift 30s) &middot; [ ] prev/next fight &middot; N/P next/prev moment &middot; F follow &middot; K key &middot; Esc clear &middot; wheel zoom &middot; drag select (Shift adds) &middot; Shift/Alt+click drop one/type &middot; right-drag pan &middot; drag compass turn</span>
+    </div>
+    <canvas id="timeline"></canvas>
+  </footer>
+
+  <script src="data/index.js"></script>
+  <script src="units.js"></script>
+  <script src="stats.js"></script>
+  <script src="frame.js"></script>
+  <script src="fx.js"></script>
+  <script src="eco.js"></script>
+  <script src="ecopanel.js"></script>
+  <script src="fights.js"></script>
+  <script src="fightpanel.js"></script>
+  <script src="card.js"></script>
+  <script src="model.js"></script>
+  <script src="map.js"></script>
+  <script src="timeline.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

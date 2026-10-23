@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AoE4 Replay Recorder</title>
+<style>
+  :root { --bg: #0d1015; --panel: #151a22; --border: #343b4a; --fg: #e5e7eb; --muted: #9ca3af; --accent: #3b82f6;
+          --ok: #22c55e; --warn: #eab308; --bad: #ef4444; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px system-ui, sans-serif; }
+  main { max-width: 960px; margin: 0 auto; padding: 24px; }
+  h1 { font-size: 20px; margin: 0 0 16px; }
+  section { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; margin-bottom: 14px; }
+  .check { display: flex; align-items: baseline; gap: 10px; padding: 4px 0; flex-wrap: wrap; }
+  .mark { width: 16px; font-weight: 700; }
+  .ok { color: var(--ok); } .bad { color: var(--bad); } .warn { color: var(--warn); } .muted { color: var(--muted); }
+  .path { color: var(--muted); font-size: 13px; word-break: break-all; }
+  button { background: #1f2430; color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 5px 12px;
+           font: inherit; cursor: pointer; }
+  button:hover { border-color: #5b6578; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+  .add { display: flex; gap: 10px; align-items: stretch; }
+  textarea { flex: 1; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 6px;
+             padding: 8px 10px; font: inherit; resize: vertical; min-height: 40px; }
+  #addMsg { margin-top: 8px; min-height: 18px; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 12px; font-weight: 600; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  td { padding: 9px 8px; border-bottom: 1px solid #222836; vertical-align: top; }
+  td.status { width: 34%; }
+  td.action { width: 96px; text-align: right; white-space: nowrap; }
+  .bar { height: 5px; background: var(--bg); border-radius: 3px; margin-top: 6px; overflow: hidden; }
+  .bar > div { height: 100%; background: var(--warn); }
+  footer { display: flex; align-items: center; gap: 14px; }
+  #summary { flex: 1; }
+  #note { margin-top: 8px; }
+  .empty { color: var(--muted); padding: 14px 8px; }
+  .assets { font-size: 12px; margin-top: 4px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>AoE4 Replay Recorder</h1>
+
+  <section id="checks">
+    <div class="check" id="game"></div>
+    <div class="check" id="steam"></div>
+    <div class="check" id="saves"></div>
+  </section>
+
+  <section>
+    <div class="add">
+      <textarea id="links" rows="2" placeholder="Paste aoe4world match links here (one or many), for example https://aoe4world.com/players/8442107-Wam01/games/255891389"></textarea>
+      <button class="primary" id="addBtn">Add</button>
+    </div>
+    <div id="addMsg" class="muted">Open a match on aoe4world.com, copy the address from the browser's address bar and paste it here.</div>
+  </section>
+
+  <section>
+    <table>
+      <thead><tr><th>Match</th><th>Map · length</th><th>Status</th><th></th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </section>
+
+  <section>
+    <footer>
+      <div id="summary"></div>
+      <button id="clear">Clear list</button>
+      <button id="toggle"></button>
+    </footer>
+    <div id="note" class="warn"></div>
+  </section>
+</main>
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+
+function h(tag, attrs = {}, ...children) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else el.setAttribute(k, v);
+  }
+  for (const c of children.flat()) if (c != null && c !== false) el.append(c);
+  return el;
+}
+
+async function post(path, body = {}) {
+  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  return r.json();
+}
+
+function duration(s) {
+  return s >= 3600 ? `${(s / 3600).toFixed(1)} h` : `${Math.max(1, Math.round(s / 60))} min`;
+}
+
+function check(el, good, title, ...rest) {
+  el.replaceChildren(h("span", { class: "mark " + (good ? "ok" : "bad") }, good ? "✓" : "✗"), h("span", {}, title),
+    ...rest.filter(c => c != null && c !== false));
+}
+
+async function pick(what) {
+  const r = await post("/api/pick", { what });
+  if (r.error) alert(r.error);
+  refresh();
+}
+
+function render(s) {
+  const g = s.game;
+  if (g.found) {
+    check($("#game"), true, "Age of Empires IV found",
+      h("span", { class: "path" }, `${g.dir} · version ${g.build ?? "?"} · ${g.picked ? "picked by you" : "found through Steam"}`),
+      h("button", { onclick: () => pick("game") }, "Change…"),
+      g.picked && h("button", { onclick: () => pick("auto") }, "Find automatically"));
+  } else {
+    check($("#game"), false, g.dir ? "Age of Empires IV is not in the picked folder" : "Age of Empires IV not found",
+      g.dir && h("span", { class: "path" }, g.dir),
+      h("button", { class: "primary", onclick: () => pick("game") }, "Pick its folder…"));
+  }
+  const st = s.steam;
+  check($("#steam"), st.signedIn,
+    st.signedIn ? "Steam running and signed in" : st.running ? "Steam is running but not signed in" : "Steam is not running",
+    !st.signedIn && h("span", { class: "muted" }, "Recording needs Steam open and signed in."));
+  check($("#saves"), true, "Replays are saved in", h("span", { class: "path" }, s.replaysDir),
+    h("button", { onclick: () => pick("replays") }, "Change…"));
+
+  const rows = s.items.slice().reverse().map(it => {
+    const cls = { done: "ok", recording: "warn", error: "bad", failed: "bad", downloading: "muted", waiting: "muted" }[it.status];
+    return h("tr", {},
+      h("td", {}, h("a", { href: it.link, target: "_blank", rel: "noopener" }, it.title)),
+      h("td", { class: "muted" }, [it.map, it.length].filter(Boolean).join(" · ")),
+      h("td", { class: "status" }, h("div", { class: cls }, it.detail),
+        it.status === "recording" && h("div", { class: "bar" }, h("div", { style: `width:${(it.progress * 100).toFixed(1)}%` })),
+        it.assets && h("div", { class: "assets " + (it.assets.state === "error" ? "bad" : "muted") }, it.assets.text)),
+      h("td", { class: "action" },
+        it.view3d && h("button", { onclick: () => window.open(it.view3d, "_blank") }, "▶ 3D"),
+        it.view && h("button", { onclick: () => window.open(it.view, "_blank") }, it.view3d ? "2D" : "▶ View")));
+  });
+  $("#rows").replaceChildren(...(rows.length ? rows : [h("tr", {}, h("td", { colspan: 4, class: "empty" }, "No matches yet."))]));
+
+  const c = s.counts;
+  const parts = [`${c.done} done`];
+  if (c.recording) parts.push("1 recording");
+  parts.push(`${c.waiting} waiting`);
+  if (!s.paused && (c.recording || c.waiting)) parts.push(`about ${duration(s.secondsLeft)} left`);
+  $("#summary").textContent = parts.join(" · ");
+  const toggle = $("#toggle");
+  toggle.textContent = s.paused ? "Start" : "Stop";
+  toggle.className = s.paused ? "primary" : "";
+  toggle.onclick = async () => { await post(s.paused ? "/api/start" : "/api/stop"); refresh(); };
+  $("#note").textContent = s.note;
+  $("#clear").hidden = s.items.length <= c.recording;  // the match being recorded stays in the list
+}
+
+let busy = false;
+async function refresh() {
+  if (busy) return;
+  busy = true;
+  try { render(await (await fetch("/api/state")).json()); }
+  catch { $("#note").textContent = "The recorder program is not running. Start it again with Replay Recorder.bat."; }
+  finally { busy = false; }
+}
+
+$("#addBtn").addEventListener("click", async () => {
+  const text = $("#links").value;
+  const r = await post("/api/add", { text });
+  const msg = $("#addMsg");
+  if (!r.links) {
+    msg.className = "bad";
+    msg.textContent = "No match link found. A match link looks like https://aoe4world.com/players/…/games/…";
+    return;
+  }
+  msg.className = "ok";
+  msg.textContent = [r.added && `Added ${r.added} match${r.added > 1 ? "es" : ""}.`,
+                     r.known && `${r.known} already in the list.`].filter(Boolean).join(" ");
+  $("#links").value = "";
+  refresh();
+});
+
+$("#clear").addEventListener("click", async () => {
+  if (!confirm("Remove all matches from the list? Downloaded replays and recordings stay on disk, and the viewer still "
+               + "opens them. A match being recorded right now stays in the list.")) return;
+  await post("/api/clear");
+  refresh();
+});
+
+refresh();
+setInterval(refresh, 1000);
+</script>
+</body>
+</html>

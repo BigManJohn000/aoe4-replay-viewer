@@ -1,0 +1,442 @@
+<!doctype html>
+<!--
+  AoE IV 3D replay viewer.
+  Run:   node serve.mjs [port]   then open http://127.0.0.1:8080/   (ES modules + GLB need HTTP, not file://)
+  Data:  the recordings stay with the 2D viewer: serve.mjs mounts its folder under /shared/ (data/, notes/, units.js, and
+         model.js / map.js, whose model and icon art the 3D page reuses for orders, alerts, sites, conversions, cameras).
+         #<name>[/t<seconds>] picks the recording and start time (the 2D viewer's links; default aoe4_245598603);
+         core/ reads it, viewer.js renders it with Three.js. The Matches button (portal.js) lists every recording,
+         records new ones through the 2D project's Replay Recorder and opens the replay in the game (Watch in game).
+  Models: assets/models/*.glb + assets/icons/*.png come from the local game install via
+          `node tools/build-assets.mjs --all` (every civ and map object, once) or `--replay <name>` (one recording's)
+          (see its header); assets/catalog.json wires blueprints to them
+          (viewer.js ASSET_MAP adds hand-tuned entries) and anything missing gets procedural owner-tinted shapes.
+          Their textures are KTX2 (Basis), transcoded in the browser by vendor/three/examples/jsm/libs/basis/.
+  Keys:  Space play/pause · ←/→ seek 5 s (Shift 30 s) · [ / ] previous/next fight · N / P next/previous key moment ·
+         −/+ speed (0.25–32×) · WASD pan · Q/E rotate · F follow · K map key · Esc clear · Home reset view
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AoE IV Replay</title>
+<link rel="icon" href="data:,">
+<script type="importmap">
+{ "imports": {
+  "three": "./vendor/three/build/three.module.js",
+  "three/addons/": "./vendor/three/examples/jsm/"
+} }
+</script>
+<style>
+  :root {
+    --bg: #0d1117; --panel: rgba(19, 25, 28, 0.94); --border: rgba(214, 219, 205, 0.14);
+    --fg: #e6edf3; --muted: #a0aaa8; --accent: #d2b66d; --danger: #f85149;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--fg);
+    font: 12px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; user-select: none; }
+  #viewport { position: fixed; inset: 0; }
+  #viewport canvas { display: block; outline: none; }
+  #labels { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+  .amt { position: absolute; left: 0; top: 0; font: 600 11px system-ui, sans-serif; color: #fff4d6; padding: 0 4px;
+    background: rgba(20, 16, 10, 0.55); border-radius: 3px; white-space: nowrap; will-change: transform; display: none; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    box-shadow: 0 3px 12px rgba(0, 0, 0, 0.22); }
+  input[type=checkbox], input[type=range] { accent-color: var(--accent); }
+  h3 { margin: 0 0 6px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  button { font: inherit; color: var(--fg); background: rgba(255, 255, 255, 0.06); border: 1px solid var(--border);
+    border-radius: 5px; padding: 3px 8px; cursor: pointer; }
+  button:hover { background: rgba(255, 255, 255, 0.14); }
+  button.on { background: var(--accent); color: #111; border-color: var(--accent); }
+  .chip { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: -1px; margin-right: 5px; }
+
+  #topbar { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); display: flex; flex-wrap: wrap; justify-content: center;
+    gap: 4px 14px; align-items: center; padding: 6px 14px; font-size: 13px; max-width: calc(100% - 620px); width: max-content; }
+  #topbar .pl { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+  #topbar .civ { color: var(--muted); font-weight: 400; font-size: 11px; }
+  #topbar .age { font-size: 11px; color: var(--accent); font-weight: 700; min-width: 18px; }
+  #topbar .vs { color: var(--muted); }
+  #topbar .match { flex-basis: 100%; text-align: center; color: var(--muted); font-size: 11px; }
+  .res { font-size: 11px; font-weight: 600; }
+  .res.win { color: #3fb950; }
+  .res.loss { color: #f85149; }
+  #clock { font-variant-numeric: tabular-nums; font-weight: 700; min-width: 48px; text-align: center;
+    border-left: 1px solid var(--border); padding-left: 14px; }
+  #povBtn.on { background: var(--accent); color: #111; border-color: var(--accent); font-weight: 600; }
+  /* victory conditions: sacred sites (each in its holder's colour) and the 10:00 hold-all countdown; wonders */
+  #victory { display: flex; gap: 10px; align-items: center; border-left: 1px solid var(--border); padding-left: 14px; font-size: 12px; }
+  #victory[hidden], #victory > [hidden] { display: none; }
+  #victory .sites { display: flex; gap: 4px; align-items: center; cursor: help; }
+  #victory .site { width: 12px; height: 12px; border-radius: 50%; border: 2px solid #d9cba4; background: transparent; }
+  #victory .site.cap { animation: sitecap 1.2s ease-in-out infinite alternate; }
+  @keyframes sitecap { from { opacity: 1; } to { opacity: 0.35; } }
+  #victory .cd { font-variant-numeric: tabular-nums; font-weight: 700; padding: 1px 7px; border-radius: 4px; border: 1px solid; white-space: nowrap; }
+  #victory .won { cursor: help; display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+  #victory .won .whp { width: 54px; height: 5px; background: #30363d; border-radius: 3px; overflow: hidden; }
+  #victory .won .whp i { display: block; height: 100%; background: #3fb950; }
+
+  /* the drawer: a tab strip, and one pane under it at a time */
+  #right { position: fixed; top: 10px; right: 10px; width: 300px; max-height: calc(100% - 100px); display: flex; flex-direction: column; gap: 6px; }
+  #tabs { display: flex; gap: 4px; padding: 4px; }
+  #tabs button { flex: 1 1 auto; white-space: nowrap; }
+  #side { padding: 8px 10px; overflow-y: auto; min-height: 0; flex: 0 1 auto; }
+  #side[hidden], .pane[hidden] { display: none; }
+  #side details + details, #side .pane > details { margin-top: 8px; }
+  #side .note { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
+  #side summary { list-style: none; cursor: pointer; margin: 0 0 6px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  #side summary::-webkit-details-marker { display: none; }
+  #side summary::before { content: '▸'; display: inline-block; width: 12px; }
+  #side details[open] > summary::before { content: '▾'; }
+  #side summary:hover { color: var(--fg); }
+  #layers section, #layers details { margin-bottom: 12px; }
+  #layers label { display: flex; align-items: center; gap: 6px; padding: 3px 0; cursor: pointer; }
+  #layers label .n { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+  #layers label.sub { padding-left: 16px; }
+  #layers input[type=range] { width: 100%; }
+  #side select { font: inherit; background: #161b22; color: var(--fg); border: 1px solid var(--border); border-radius: 5px; padding: 3px; }
+  #layers select { width: 100%; }
+  #layers label select { width: auto; }
+  #help { color: var(--muted); font-size: 11px; }
+  #help kbd { font: inherit; color: var(--fg); }
+  #fps { color: var(--muted); font-size: 11px; padding: 3px 0; }
+  .phead { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+  .phead h3 { margin: 0; }
+  #fights { max-height: 260px; overflow-y: auto; }
+  #fights > div { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; padding: 4px; border-radius: 4px; cursor: pointer; }
+  #fights > div:hover { background: rgba(255, 255, 255, 0.08); }
+  #fights > div.cur { background: rgba(210, 182, 109, 0.14); }
+  #fights .t { font-variant-numeric: tabular-nums; color: var(--accent); min-width: 38px; }
+  #fights .d { color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; }
+  #fights .lost { flex-basis: 100%; display: flex; height: 4px; border-radius: 2px; overflow: hidden; background: #30363d; }
+  #fights .lost i { display: block; height: 100%; }
+
+  .ptab { width: 100%; border-collapse: collapse; table-layout: fixed; font-variant-numeric: tabular-nums; }
+  .ptab th { font-weight: 600; text-align: right; padding: 0 0 3px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ptab th:first-child { width: 46%; }
+  .ptab td { text-align: right; padding: 1px 0 1px 6px; white-space: nowrap; }
+  .ptab td:first-child { text-align: left; padding-left: 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+  .ptab tr.age td:first-child { color: var(--accent); }
+  .ptab td.best { color: #3fb950; font-weight: 600; }
+  .ptab td.future { opacity: 0.4; }
+  .ptab td.muted { color: var(--muted); }
+  .ptab .tsep { border-left: 1px solid rgba(255, 255, 255, 0.14); }
+  .ptab.many th, .ptab.many th:first-child { width: auto; text-align: center; padding: 0 0 2px; }
+  .ptab.many td, .ptab.many td:first-child { text-align: center; padding: 0 0 2px; font-size: 10.5px; letter-spacing: -0.2px; color: inherit; overflow: hidden; text-overflow: clip; }
+  .ptab.many td.muted { color: var(--muted); }
+  .ptab.many td.best { color: #3fb950; }
+  .ptab.many tr.lbl td { text-align: left; font-size: 11px; letter-spacing: 0; padding: 3px 0 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+  .ptab.many tr.lbl.age td { color: var(--accent); }
+  #kills { max-height: 184px; overflow-y: auto; }
+  #kills .k { display: flex; align-items: center; gap: 5px; padding: 2px 4px; border-radius: 4px; cursor: pointer; white-space: nowrap; overflow: hidden; }
+  #kills .k:hover { background: rgba(255, 255, 255, 0.08); }
+  #kills .k.fresh { animation: fresh 1.2s ease-out; }
+  @keyframes fresh { from { background: rgba(240, 180, 41, 0.35); } to { background: transparent; } }
+  #kills .t { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 34px; }
+  #kills .arrow { color: var(--danger); }
+  #kills .nm { overflow: hidden; text-overflow: ellipsis; }
+  #side .empty { color: var(--muted); }
+
+  #inspector { position: fixed; top: 10px; left: 10px; width: 280px; max-height: calc(100% - 240px); padding: 10px 12px; overflow-y: auto; }
+  #inspector.hidden { display: none; }
+  #inspector .sub { font-size: 11px; color: var(--muted); margin-top: 1px; }
+  #inspector .tweak summary { cursor: pointer; color: var(--muted); font-size: 11px; list-style: none; }
+  #inspector .tweak summary::-webkit-details-marker { display: none; }
+  #inspector .tweak summary:hover { color: var(--fg); }
+  #inspector .head { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; }
+  #inspector img { width: 48px; height: 48px; border-radius: 6px; background: #222; border: 1px solid var(--border); object-fit: cover; }
+  #inspector .title { font-size: 14px; font-weight: 700; }
+  #inspector .owner { font-size: 12px; }
+  #inspector table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  #inspector td { padding: 2px 0; vertical-align: top; }
+  #inspector td:first-child { color: var(--muted); width: 72px; }
+  #inspector .hpbar { height: 6px; background: #30363d; border-radius: 3px; margin-top: 3px; overflow: hidden; }
+  #inspector .hpbar div { height: 100%; background: #3fb950; }
+  #inspector .btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  #inspector a { color: var(--accent); cursor: pointer; text-decoration: none; }
+  #inspector code { font-size: 11px; color: #c9d1d9; word-break: break-all; }
+  #inspector .tweak { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--border); font-size: 12px; }
+  #inspector .trow { display: flex; align-items: center; gap: 6px; margin-top: 3px; }
+  #inspector .trow > span:first-child { color: var(--muted); width: 58px; flex: 0 0 auto; }
+  #inspector .trow input[type=range] { flex: 1 1 auto; min-width: 0; }
+  #inspector .trow output { width: 52px; text-align: right; font-variant-numeric: tabular-nums; }
+  #inspector .trow .note { flex: 1 1 auto; width: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #inspector .trow select { flex: 1 1 auto; min-width: 0; }
+  .resetAll:not(:disabled) { color: var(--fg); border-color: #d9534f; background: rgba(217, 83, 79, 0.22); font-weight: 600; }
+  /* shared stat card / selection tray (shared/card.js, rvc-* classes) inside the inspector */
+  #inspector .rvc-tray img { width: 32px; height: 32px; border: 0; border-radius: 0; background: none; }
+  #inspector .rvc-tray button { padding: 0; }
+  #inspector .grp { font-size: 12px; margin: 2px 0 4px; }
+  #marquee { position: fixed; display: none; pointer-events: none; z-index: 5; border: 1px solid rgba(255, 255, 255, 0.85);
+    background: rgba(120, 190, 255, 0.14); box-sizing: border-box; }
+
+  #timeline { position: fixed; left: 10px; right: 10px; bottom: 10px; display: flex; gap: 10px; align-items: center; padding: 8px 10px; }
+  #play { width: 34px; font-size: 14px; }
+  #speeds { display: flex; gap: 3px; align-items: center; }
+  #speed { min-width: 40px; text-align: center; font-variant-numeric: tabular-nums; }
+  #speeds button { width: 24px; padding: 3px 0; }
+  button:disabled { opacity: 0.4; cursor: default; }
+  #time { font-variant-numeric: tabular-nums; min-width: 92px; text-align: center; }
+  #trackWrap { position: relative; flex: 1; height: 54px; }
+  #track { position: absolute; inset: 0; width: 100%; height: 100%; cursor: pointer; border-radius: 4px; }
+
+  #tooltip { position: fixed; pointer-events: none; padding: 4px 8px; font-size: 12px; display: none; white-space: nowrap; z-index: 5; }
+  #loading { position: fixed; left: 50%; bottom: 84px; transform: translateX(-50%); padding: 5px 12px; font-size: 12px; color: var(--muted); }
+  #loading progress { width: 160px; vertical-align: middle; margin-left: 8px; }
+  /* under-attack notices: left edge, newest at the bottom, each fades after a few seconds; click jumps there */
+  #toasts { position: fixed; left: 10px; bottom: 160px; width: 300px; display: flex; flex-direction: column; gap: 6px; z-index: 6; pointer-events: none; }
+  .toast { pointer-events: auto; cursor: pointer; position: relative; padding: 6px 10px 6px 28px; font-size: 12px; border-left: 4px solid var(--danger);
+    animation: toastIn .25s ease-out; transition: opacity .6s, transform .6s; }
+  .toast:hover { background: rgba(40, 46, 50, 0.98); }
+  .toast.out { opacity: 0; transform: translateX(-12px); }
+  .toast::before { content: ''; position: absolute; left: 10px; top: 50%; width: 8px; height: 8px; margin-top: -4px; border-radius: 50%;
+    background: var(--danger); animation: ping 1.2s ease-out infinite; }
+  .toast .tt { float: right; margin-left: 8px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  @keyframes toastIn { from { opacity: 0; transform: translateX(-16px); } to { opacity: 1; transform: none; } }
+  @keyframes ping { from { box-shadow: 0 0 0 0 rgba(248, 81, 73, 0.75); } to { box-shadow: 0 0 0 9px rgba(248, 81, 73, 0); } }
+  /* Match trends (shared/trends.html) in a modal over the map */
+  #trendsModal { position: fixed; top: 56px; left: 40px; right: 40px; bottom: 86px; display: none; flex-direction: column; z-index: 8; }
+  #trendsModal.open { display: flex; }
+  #trendsModal .mhead { position: relative; display: flex; align-items: baseline; gap: 12px; padding: 8px 40px 8px 12px; border-bottom: 1px solid var(--border); }
+  #trendsModal .mhead b { font-size: 13px; }
+  #trendsModal .x { position: absolute; right: 6px; top: 5px; border: 0; background: none; color: var(--muted); font-size: 15px; padding: 0 5px; }
+  #trendsModal iframe { flex: 1; width: 100%; border: 0; border-radius: 0 0 8px 8px; background: var(--bg); }
+  #fatal { position: fixed; inset: 0; display: none; flex-direction: column; gap: 12px; align-items: center; justify-content: center; font-size: 15px; color: var(--danger); }
+
+  button.primary { background: var(--accent); color: #111; border-color: var(--accent); }
+  .btn { display: inline-block; color: var(--fg); background: rgba(255, 255, 255, 0.06); border: 1px solid var(--border);
+    border-radius: 5px; padding: 3px 8px; text-decoration: none; cursor: pointer; }
+  .btn:hover { background: rgba(255, 255, 255, 0.14); }
+  .btn.off { opacity: 0.4; cursor: default; }
+  .muted { color: var(--muted); }
+  .ok { color: #3fb950; }
+  .warn { color: #e3b341; }
+  .bad { color: var(--danger); }
+  #notice { position: fixed; top: 56px; left: 50%; transform: translateX(-50%); max-width: min(720px, 92vw); display: none;
+    padding: 8px 30px 8px 12px; font-size: 12px; z-index: 6; user-select: text; }
+  #notice.show { display: block; }
+  #notice code { font-size: 11px; color: var(--accent); }
+  #notice .x, #matches .x { position: absolute; right: 6px; top: 5px; border: 0; background: none; color: var(--muted); font-size: 15px; padding: 0 5px; }
+  #matches { position: fixed; top: 56px; left: 50%; transform: translateX(-50%); width: min(780px, 94vw);
+    max-height: calc(100% - 150px); display: none; flex-direction: column; z-index: 7; }
+  #matches.open { display: flex; }
+  #matches .mhead { position: relative; display: flex; align-items: center; gap: 6px; padding: 8px 40px 8px 12px; border-bottom: 1px solid var(--border); }
+  #matches .mhead b { font-size: 13px; margin-right: 8px; }
+  #matches section { padding: 8px 12px 10px; overflow-y: auto; min-height: 0; user-select: text; }
+  #matches input[type=search], #matches textarea { width: 100%; font: inherit; background: #161b22; color: var(--fg);
+    border: 1px solid var(--border); border-radius: 5px; padding: 5px 8px; margin-bottom: 6px; }
+  #matches textarea { height: 60px; resize: vertical; }
+  #matches p { margin: 4px 0 8px; }
+  #matches .row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+  #matches .grow { flex: 1; }
+  .mrow { display: grid; grid-template-columns: 78px 1fr auto; gap: 1px 10px; align-items: center; padding: 6px; border-radius: 5px; }
+  .mrow:hover { background: rgba(255, 255, 255, 0.06); }
+  .mrow.cur { background: rgba(210, 182, 109, 0.14); }
+  .mrow .when { grid-row: span 2; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .mrow .who { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mrow .civ { color: var(--muted); font-weight: 400; font-size: 11px; }
+  .mrow .vs { color: var(--muted); font-weight: 400; }
+  .mrow .win { color: #3fb950; font-weight: 400; font-size: 11px; }
+  .mrow .acts { grid-row: span 2; display: flex; gap: 4px; align-items: center; }
+  .mrow .now { color: var(--accent); padding: 0 6px; }
+  .mrow .meta { color: var(--muted); font-size: 11px; }
+  .mrow .big { color: #e3b341; }
+  .check { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 3px 0; }
+  .check .mark { font-weight: 700; width: 12px; }
+  .check .path { color: var(--muted); font-size: 11px; word-break: break-all; }
+  .rrow { display: grid; grid-template-columns: 1fr 120px 170px auto; gap: 8px; align-items: center; padding: 5px 0; border-top: 1px solid var(--border); }
+  .rrow .title { color: var(--fg); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rrow .title:hover { color: var(--accent); }
+  .rrow .status { display: flex; flex-direction: column; gap: 3px; min-width: 0; overflow-wrap: anywhere; }
+  .rrow .bar { height: 4px; background: #30363d; border-radius: 2px; overflow: hidden; }
+  .rrow .bar span { display: block; height: 100%; background: var(--accent); }
+  .rrow .acts { display: flex; gap: 4px; }
+
+  /* 2D-viewer panels: map key, army on screen, key-moment caption and list, unit names */
+  .ulabel { position: absolute; left: 0; top: 0; font: 600 10px system-ui, sans-serif; color: rgba(255, 255, 255, 0.85);
+    text-shadow: 0 0 3px #000, 0 1px 2px #000; white-space: nowrap; will-change: transform; display: none; }
+  #legend { position: fixed; left: 10px; bottom: 86px; max-width: calc(100% - 340px); display: flex; flex-direction: column;
+    gap: 3px; font-size: 11px; color: var(--muted); padding: 4px 8px; }
+  #legend .lrow { display: flex; flex-wrap: wrap; align-items: center; column-gap: 10px; row-gap: 2px; }
+  #legend[hidden], #legend .lrow[hidden], #legendShow[hidden] { display: none; }
+  #legend .lrow b { width: 84px; color: var(--fg); font-weight: 600; }
+  #legend span { display: inline-flex; align-items: center; gap: 4px; cursor: help; }
+  #legend img { width: 22px; height: 22px; }
+  #legend .lhead { display: flex; align-items: center; gap: 10px; color: var(--fg); }
+  #legend .lhead button, #legendShow { padding: 0 6px; font-size: 11px; line-height: 16px; }
+  #legendShow { position: fixed; left: 10px; bottom: 86px; color: var(--muted); }
+  #comp { position: fixed; top: var(--below-top, 56px); right: 320px; max-width: 340px; max-height: calc(100% - 200px); overflow-y: auto; font-size: 12px; padding: 6px 8px; }
+  body.drawer-closed #comp { right: 10px; }
+  #comp[hidden], #caption[hidden] { display: none; }
+  #comp .ch { color: var(--muted); font-size: 11px; margin-bottom: 2px; }
+  .cp { display: flex; align-items: center; gap: 5px; margin-top: 4px; white-space: nowrap; }
+  .cp i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+  .cg { display: grid; grid-template-columns: 1fr 1fr; gap: 1px 10px; margin: 2px 0 0 14px; }
+  .cg span { display: flex; align-items: center; gap: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cg img { width: 22px; height: 22px; flex-shrink: 0; }
+  .cg b { min-width: 16px; text-align: right; }
+  #caption { position: fixed; top: 64px; left: 300px; max-width: 460px; border-color: #f59e0b; padding: 8px 10px; font-size: 13px; line-height: 1.4; z-index: 4; }
+  #caption .capHead { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; color: #fbbf24; }
+  #caption .x { padding: 0 6px; line-height: 1.2; }
+  #caption p { margin: 6px 0; }
+  #caption .tag { display: inline-block; font-size: 11px; font-weight: 600; padding: 0 5px; margin-right: 6px; border-radius: 3px; background: #1e3a5f; color: #bfdbfe; }
+  #caption .tag.read { background: #3f3a1e; color: #fde68a; }
+  #caption .actions { display: flex; gap: 6px; }
+  .moment { padding: 6px 8px; border: 1px solid var(--border); border-radius: 5px; margin-bottom: 5px; cursor: pointer; }
+  .moment:hover { border-color: #5b6578; }
+  .moment.sel { border-color: #f59e0b; background: rgba(245, 158, 11, 0.08); }
+  .moment .row1 { display: flex; justify-content: space-between; gap: 8px; }
+  .moment .row1 b { color: #fbbf24; }
+  #metric { font: inherit; font-size: 12px; max-width: 150px; background: #161b22; color: var(--fg); border: 1px solid var(--border); border-radius: 5px; padding: 3px; }
+</style>
+</head>
+<body class="drawer-closed">
+<div id="viewport"></div>
+<div id="labels"></div>
+<div id="caption" class="panel" hidden></div>
+<div id="comp" class="panel" hidden></div>
+<div id="legend" class="panel">
+  <div class="lhead"><b>Map key</b><button id="legendHide" title="Hide the key (K)">Hide &times;</button></div>
+  <div class="lrow" id="legendMarks" hidden></div>
+</div>
+<button id="legendShow" class="panel" hidden title="Show the map key (K)">Show key</button>
+
+<header id="topbar" class="panel"></header>
+<div id="notice" class="panel"></div>
+<div id="matches" class="panel"></div>
+<div id="trendsModal" class="panel">
+  <div class="mhead"><b>📊 Match trends</b><span class="muted">Every recorded match: economy, army and fights over time</span><button class="x" id="trendsClose" title="Close (Esc)">&times;</button></div>
+  <iframe id="trendsFrame" title="Match trends"></iframe>
+</div>
+<div id="toasts"></div>
+
+<!-- the one drawer: three tabs, one open at a time; clicking the open tab collapses it -->
+<aside id="right">
+  <nav id="tabs" class="panel">
+    <button data-tab="fights" title="Engagements, kill feed and key moments">⚔ Fights</button>
+    <button data-tab="eco" title="Players, age-ups, upgrades and opportunity cost">Economy</button>
+    <button data-tab="layers" title="What the map shows, vision, camera, graphics and alerts">Layers &amp; settings</button>
+  </nav>
+  <div id="side" class="panel" hidden>
+    <section class="pane" data-pane="fights" hidden>
+      <div class="phead"><h3>Engagements</h3>
+        <select id="fightSort" title="Order of the engagement list">
+          <option value="impact">Most impactful</option>
+          <option value="time">Chronological</option>
+        </select></div>
+      <div id="fights"></div>
+      <details id="fightBox" hidden open><summary id="fightTitle">Engagement</summary><div id="fightPanel"></div></details>
+      <details open><summary>Kill feed</summary><div id="kills"></div></details>
+      <details id="momentsBox" hidden open><summary id="momentsTitle">Key moments</summary><div id="momentList"></div></details>
+    </section>
+    <section class="pane" data-pane="eco" hidden>
+      <details id="ecoBox" open><summary title="Villager upgrades researched later than the opponent: what the delay cost, and whether it bought an attack">Upgrade opportunity cost</summary><div id="ecoCost"></div></details>
+      <details open><summary>Players</summary><div id="pstats"></div>
+        <p class="note">Banked (unspent) resources; Army counts living military units.</p></details>
+      <details id="summaryBox" hidden open><summary>Match result</summary><div id="psummary"></div>
+        <p class="note">From the aoe4world match summary: final figures, not time-dependent.</p></details>
+      <details open><summary>Age-ups &amp; eco upgrades</summary><div id="techs"></div>
+        <p class="note">Green = first player to get it. Dimmed = not researched yet at this time.</p></details>
+    </section>
+    <section class="pane" id="layers" data-pane="layers" hidden>
+      <section>
+        <h3>Units &amp; buildings</h3>
+        <div id="cats"></div>
+      </section>
+      <section>
+        <h3>Players</h3>
+        <div id="playerFilter"></div>
+      </section>
+      <section>
+        <h3>Vision</h3>
+        <select id="vision" title="Fog of war: whose sight to show. Ground they don't see darkens (grey where explored, black where never seen)"></select>
+        <label title="Enemies the chosen side can't see: hidden (as in game), or drawn dimmed inside the fog"><input type="checkbox" id="optGhosts"> Ghost unseen enemies</label>
+      </section>
+      <section>
+        <h3>Camera</h3>
+        <select id="camView" title="Watch through a player's own camera, from the replay's camera records (C cycles). Drag, wheel, WASD or Q/E return to the free camera"></select>
+      </section>
+      <section>
+        <h3>Alerts</h3>
+        <label title="A short notice on the left edge when an attack starts somewhere quiet for 15 s; click it to jump there"><input type="checkbox" id="optToasts" checked> Under-attack notifications</label>
+      </section>
+      <section>
+        <h3>Graphics</h3>
+        <select id="quality" title="Low (fast): native-resolution pixels (DPR 1), no shadows, no ambient occlusion or anti-aliasing passes, no grass, flat sky lighting instead of the image-based fill, distant and off-screen units re-posed every third frame">
+          <option value="high">High</option>
+          <option value="low">Low (fast)</option>
+        </select>
+      </section>
+      <details>
+        <summary>Overlays</summary>
+        <label><input type="checkbox" id="optBars" checked> Health bars <span class="n"><select id="optBarMode"><option value="auto">damaged</option><option value="all">all</option></select></span></label>
+        <label><input type="checkbox" id="optDmg" checked> Damage numbers &amp; flash</label>
+        <label><input type="checkbox" id="optCombatFx" checked> Combat FX <span class="n">(splash, muzzle, heals)</span></label>
+        <label><input type="checkbox" id="optAttacks" checked> Attack lines &amp; alert rings</label>
+        <label title="Colour attack lines by target choice: green good (the best target in reach), yellow ok, red poor"><input type="checkbox" id="optHeat"> Target fire</label>
+        <label><input type="checkbox" id="optProjectiles" checked> Projectiles</label>
+        <label><input type="checkbox" id="optKills" checked> Kill markers</label>
+        <label><input type="checkbox" id="optFights" checked> Engagement zones</label>
+        <label><input type="checkbox" id="optGrid" checked> Tactical grid</label>
+        <label><input type="checkbox" id="optGaia" checked> Nature &amp; resources</label>
+        <label><input type="checkbox" id="optGrass" checked> Grass (close up)</label>
+        <label><input type="checkbox" id="optShadows" checked> Shadows</label>
+        <label title="Dashed line from each army squad to where it was last ordered to move, ending in a ring (the 2D viewer's Orders)"><input type="checkbox" id="optOrders" checked> Move orders</label>
+        <label title="The same for villagers' orders (gather, build, deliver …)"><input type="checkbox" id="optEcoOrders"> Eco orders</label>
+        <label title="The path army units covered in the last 6 s"><input type="checkbox" id="optTrails" checked> Trails</label>
+        <label title="What each player's screen showed, from the replay's camera records"><input type="checkbox" id="optCams"> Player cameras</label>
+        <label title="Army unit names beside the units, once zoomed in close"><input type="checkbox" id="optLabels"> Unit names</label>
+        <label title="The army and villagers in view, per player, as the Vision setting shows them"><input type="checkbox" id="optComp" checked> Army on screen</label>
+        <label title="The map key: what the lines, marks and icons mean (K)"><input type="checkbox" id="optLegend" checked> Map key</label>
+        <label><input type="checkbox" id="optAO" checked> Ambient occlusion</label>
+      </details>
+      <details>
+        <summary>Unit scale <span id="scaleVal" title="Scale applied at the current zoom" style="float:right;color:var(--fg)"></span></summary>
+        <label for="unitScale" style="display:flex;justify-content:space-between">At overview zoom <span id="scaleMax" style="color:var(--fg)"></span></label>
+        <input type="range" id="unitScale" min="1" max="5" step="0.25" value="2.5">
+        <label title="Ease to true size when zoomed in; the slider applies at overview zoom"><input type="checkbox" id="optAdaptive" checked> True size up close</label>
+        <button class="resetAll" title="Clear every inspector scale and Y-offset override (all objects and blueprints) back to 1× / 0 m" style="margin-top:6px;width:100%">Reset all scales</button>
+      </details>
+      <details id="help"><summary>Controls</summary>
+        <kbd>Drag</kbd> orbit · <kbd>Right-drag</kbd> pan · <kbd>Wheel</kbd> zoom · <kbd>WASD</kbd> pan · <kbd>Q/E</kbd> rotate<br>
+        <kbd>Space</kbd> play · <kbd>← →</kbd> seek 5 s (Shift 30 s) · <kbd>[ ]</kbd> previous/next fight · <kbd>− +</kbd> speed<br>
+        <kbd>F</kbd> follow · dbl-click follow · <kbd>C</kbd> player cameras · <kbd>K</kbd> map key · <kbd>N P</kbd> next/previous key moment · <kbd>Esc</kbd> deselect · <kbd>Home</kbd> reset view
+      </details>
+      <details id="debugBox"><summary>Debug</summary>
+        <label title="Raw facts on the unit card: entity id, blueprint, squad, status, visual tier, lifetime, position, telemetry"><input type="checkbox" id="optDebug"> Debug info on the unit card</label>
+        <div id="fps"></div>
+      </details>
+    </section>
+  </div>
+</aside>
+<div id="inspector" class="panel hidden"></div>
+
+<footer id="timeline" class="panel">
+  <button id="play" title="Play / pause (Space)">▶</button>
+  <div id="speeds"><button id="slower" title="Slower (−)">−</button><span id="speed">1×</span><button id="faster" title="Faster (+)">+</button></div>
+  <div id="time">0:00 / 0:00</div>
+  <select id="metric" title="What the timeline curves plot, per player">
+    <option value="armyValue">Army value (resources)</option>
+    <option value="military">Military units</option>
+    <option value="villagers">Villagers</option>
+  </select>
+  <div id="trackWrap"><canvas id="track"></canvas></div>
+</footer>
+
+<div id="tooltip" class="panel"></div>
+<div id="loading" class="panel"><span id="loadText">Loading the recording</span> <progress id="loadBar" value="0" max="1"></progress></div>
+<div id="fatal"></div>
+
+<script src="shared/units.js"></script>
+<script src="shared/stats.js"></script>
+<script src="shared/frame.js"></script>
+<script src="shared/fx.js"></script>
+<script src="shared/eco.js"></script>
+<script src="shared/ecopanel.js"></script>
+<script src="shared/fights.js"></script>
+<script src="shared/fightpanel.js"></script>
+<script src="shared/model.js"></script>
+<script src="shared/card.js"></script>
+<script src="shared/map.js"></script>
+<script type="module" src="viewer.js"></script>
+</body>
+</html>

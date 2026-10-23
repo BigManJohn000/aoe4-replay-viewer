@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AoE4 Trends</title>
+<style>
+  :root { --bg: #0d1015; --panel: #151a22; --border: #343b4a; --fg: #e5e7eb; --muted: #9ca3af;
+          --win: #22c55e; --loss: #ef4444; --unknown: #9ca3af; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px system-ui, sans-serif; }
+  main { max-width: 1320px; margin: 0 auto; padding: 20px 24px; }
+  header { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 10px; }
+  h1 { font-size: 20px; margin: 0; }
+  h2 { font-size: 15px; margin: 0 0 6px; }
+  .spacer { flex: 1; }
+  a { color: #93c5fd; text-decoration: none; } a:hover { text-decoration: underline; }
+  select { background: #1f2430; color: var(--fg); border: 1px solid var(--border); border-radius: 4px; padding: 3px 8px; font: inherit; }
+  section { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; margin-bottom: 14px; }
+  .muted { color: var(--muted); }
+  .note { color: var(--muted); font-size: 13px; margin: 0 0 8px; }
+  table { border-collapse: collapse; width: 100%; }
+  th { text-align: left; font-size: 12px; font-weight: 600; color: var(--muted); padding: 5px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  td { padding: 6px 8px; border-bottom: 1px solid #222836; white-space: nowrap; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  #compare { width: auto; }
+  td { padding: 5px 7px; border-bottom: 1px solid #222836; white-space: nowrap; }
+  td.wrap { white-space: normal; min-width: 160px; }
+  .count { color: var(--muted); font-size: 12px; }
+  .win { color: var(--win); } .loss { color: var(--loss); } .unknown { color: var(--unknown); }
+  .curves { display: flex; gap: 16px; flex-wrap: wrap; }
+  .curves > div { flex: 1; min-width: 420px; }
+  .key { display: flex; gap: 14px; font-size: 13px; margin: 4px 0; }
+  .key i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; }
+  svg { display: block; width: 100%; height: auto; }
+  svg text { fill: var(--muted); font: 11px system-ui, sans-serif; }
+  svg .grid { stroke: #222836; }
+  svg .median { stroke: var(--muted); stroke-dasharray: 4 4; }
+  .tableWrap { overflow-x: auto; }
+  #empty { margin-top: 30px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Trends</h1>
+    <label>Player <select id="player"></select></label>
+    <label>Games <select id="mode">
+      <option value="all">All</option>
+      <option value="1v1">1v1 only</option>
+      <option value="team">Team games only</option>
+    </select></label>
+    <span class="spacer"></span>
+    <span class="muted" id="made"></span>
+    <a href="index.html">Replay viewer</a>
+  </header>
+  <p id="summary"></p>
+
+  <div id="content">
+    <section>
+      <h2>Wins and losses</h2>
+      <p class="note">The middle game's number (half the games are above it, half below) in the games won and in the games
+        lost. A big gap between the two columns points at what decides this player's games.</p>
+      <table id="compare"></table>
+    </section>
+
+    <section>
+      <h2>Game by game</h2>
+      <p class="note">Oldest game on the left. Each dot is a game; click one to open it in the viewer. The dashed line is
+        the middle value of all games shown.</p>
+      <label>Show <select id="metric"></select></label>
+      <div class="key"><span><i style="background: var(--win)"></i>Win</span><span><i style="background: var(--loss)"></i>Loss</span><span><i style="background: var(--unknown)"></i>Result unknown</span></div>
+      <div id="byGame"></div>
+    </section>
+
+    <section>
+      <h2>Through the game</h2>
+      <p class="note">Minute by minute, the middle value of the games won and of the games lost. A line stops when fewer
+        than two of its games last that long.</p>
+      <div class="key"><span><i style="background: var(--win)"></i>Games won</span><span><i style="background: var(--loss)"></i>Games lost</span></div>
+      <div class="curves">
+        <div><h2>Villagers</h2><div id="vilCurve"></div></div>
+        <div><h2>Army value (resources)</h2><div id="armyCurve"></div></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Games</h2>
+      <div class="tableWrap"><table id="games"></table></div>
+    </section>
+  </div>
+
+  <p id="empty" hidden>No trends yet. They are made when a match is converted, or by running
+    <code>python tools/trends.py</code> in this folder.</p>
+</main>
+<script src="data/trends/games.js"></script>
+<script src="trends.js"></script>
+</body>
+</html>
