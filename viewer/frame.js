@@ -682,7 +682,8 @@
     for (const e of C.fighters) {
       let f = C.facts.get(e.id);
       if (!alive(e, t)) { if (f) f.on = false; continue; }
-      if (!f) C.facts.set(e.id, (f = { e, on: false, px: 0, pz: 0, php: 0, pown: 0, team: null }));
+      if (!f) C.facts.set(e.id, (f = { e, on: false, px: 0, pz: 0, php: 0, pown: 0, team: null,
+        statT: NaN, stats: null, st: null, weapon: null }));
       const L = locate(e, t);
       f.on = true; f.px = L.x; f.pz = L.z; f.php = L.hp; f.pown = ownerAt(e, t);
       const p = C.players.get(f.pown); f.team = p ? p.team : null;
@@ -691,10 +692,21 @@
     }
   }
   const costOf = (e) => e.value || ((F.statOf(e.bp) || {}).cost || {}).total || 50;
+  // Resolve each participating unit only once per sample, not once per attacker × candidate. In particular,
+  // statsAt's blueprint/owner/upgrade-count key and tier substitution stay out of the candidate hot path.
+  function priorityStats(C, f, t) {
+    if (f.statT === t) return;
+    f.statT = t;
+    f.stats = F.statsAt(C, f.e, t);
+    const bp = f.stats ? f.stats.bp : bpAt(f.e, t);
+    f.st = F.statOf(bp);
+    const wa = timingOf(bp);
+    f.weapon = weaponOf(f.st, wa.main ? DTYPE[wa.main.damage] : "melee");
+  }
   /** A's priority on B: Damage(A→B)·Cost(B)/CurHP(B). a, b: facts. */
   function prioScore(C, a, b, t) {
-    const wa = timingOf(a.e.bp), w = weaponOf(F.statOf(a.e.bp), wa.main ? DTYPE[wa.main.damage] : "melee");
-    const D = hitDamage(w, F.statOf(b.e.bp), F.statsAt(C, a.e, t), null);
+    priorityStats(C, a, t); priorityStats(C, b, t);
+    const D = hitDamage(a.weapon, b.st, a.stats, b.stats);
     return (D * costOf(b.e)) / Math.max(1, b.php);
   }
   /**
