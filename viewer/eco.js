@@ -19,7 +19,7 @@
 //     rates { resource: { rate, source, n } } (the player's measured no-tech rates, see "Base rate"),
 //     rateSource "measured" | "default" | "mixed",
 //     missed    resources not gathered because of the delay,
-//     deficit   missed − costTotal (negative: the delay saved more than it cost),
+//     deficit   late/never: missed − costTotal (negative: delay saved more than it cost); ontime: 0; na: null,
 //     tempo     { t0: tBench+90, t1: tBench+180 },
 //     capitalized { yes, label, applies, bank{...}, impact{...}, reason },
 //     assumption text.
@@ -532,7 +532,7 @@
     let meas = 0;
     for (const i of resIdx) { row.rates[RES[i]] = rates[RES[i]]; if (rates[RES[i]].source === "measured") meas++; }
     row.rateSource = meas === resIdx.length ? "measured" : meas ? "mixed" : "default";
-    row.deficit = row.missed - row.costTotal;
+    row.deficit = row.status === "na" ? null : late ? row.missed - row.costTotal : 0;
     row.capitalized = capitalize(env, P, row);
     const tail = mine ? "" : " Never researched: integrated to the end of the replay (" + fmtT(env.end) + ").";
     row.assumption = (def.kind === "trip"
