@@ -33,7 +33,7 @@
 // }
 //
 // ── Micro Rating v2 (0–100, per side) ──
-// Raw observations are mapped piecewise-linearly to percentiles of 151 recorded 2000+ games: 50 = median side.
+// Raw observations are mapped piecewise-linearly to percentiles of 211 recorded 2000+ games: 50 = median side.
 // Equal calibration quantiles share their midpoint percentile; extrapolation is clamped to 0–100.
 // Weighted mean: priority 30 %, focus fire 25 %, kiting 15 %, splash 15 %, uptime 15 %; absent parts renormalise.
 // Focus combines 60 % percentile of kills with ≥3 recent attackers and 40 % percentile of waste control.
@@ -102,24 +102,24 @@
   const AREA = 1.5;                 // × fight.radius
   const STRENGTH_R = 2;             // × fight.radius, units counted in the Lanchester strength
   const W = { priority: 0.30, focus: 0.25, kiting: 0.15, splash: 0.15, uptime: 0.15 };
-  // harvest/analysis/micro_calibration.json, 151 recorded 2000+ MMR 1v1 games, 2026-10-23.
+  // harvest/analysis/micro_calibration.json, 211 recorded 2000+ MMR 1v1 games, 2026-10-23.
   //                    p10     p25     p50     p75      p90     higher wins   corr
-  // priority           .443    .623    .805    .953     1       54.8%        +.093
-  // overkill           0       .661    1       1        1       37.2%        −.134
-  // uptime             .202    .338    .541    .757     .922    53.2%        +.058
-  // splash             0       0       .1085   .571     1       63.6% (n22)  +.262
-  // moving share       0       0       0       .06975   .2      49.1%        −.044
-  // chase gain (m)    −1.348   −.527    0       1.98975  6.5499 49.1%        −.029
-  // focus kill share   0       .2      .606    1        1       50.7%        +.049
+  // priority           .443    .6235   .805    .957     1       55.0%        +.096
+  // overkill           0       .634    1       1        1       36.3%        −.149
+  // uptime             .239    .374    .571    .779     .946    55.5%        +.073
+  // splash             0       0       .184    .667     1       75.0% (n24)  +.332
+  // moving share       0       0       0       .067     .197    48.3%        −.052
+  // chase gain (m)    −1.405   −.548    0       2.067    6.436   51.3%        −.002
+  // focus kill share   0       .2      .615    1        1       52.1%        +.054
   // Descriptive, not causal: winners finish more focused kills, making waste control alone misleading.
   const CAL = {
-    priority: [0.443, 0.623, 0.805, 0.953, 1],
-    overkill: [0, 0.661, 1, 1, 1],
-    uptime: [0.202, 0.338, 0.541, 0.757, 0.922],
-    splash: [0, 0, 0.1085, 0.571, 1],
-    kiting: [0, 0, 0, 0.06975, 0.2],
-    kitingChaseGain: [-1.348, -0.527, 0, 1.98975, 6.5499],
-    focus: [0, 0.2, 0.606, 1, 1],
+    priority: [0.443, 0.6235, 0.805, 0.957, 1],
+    overkill: [0, 0.634, 1, 1, 1],
+    uptime: [0.239, 0.374, 0.571, 0.779, 0.946],
+    splash: [0, 0, 0.184, 0.667, 1],
+    kiting: [0, 0, 0, 0.067, 0.197],
+    kitingChaseGain: [-1.4047, -0.5483, 0, 2.0673, 6.4363],
+    focus: [0, 0.2, 0.615, 1, 1],
   };
   const QUANTILES = [10, 25, 50, 75, 90];
   function percentile(key, raw) {

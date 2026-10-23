@@ -12,13 +12,18 @@ scripts over cached data; only aggregated tables were read into model context.
 | **Eligible**: patch 11308, ≥ 5 min, both players MMR ≥ 2 000 | **1 719** | 65 | 1 654 |
 | aoe4world summaries fetched OK (540 had none: HTTP 404) | 1 179 | 56 | 1 123 |
 | Summaries analysed (2 non-1v1 shapes excluded) | 1 177 games / 2 354 player-games | 56 player-games | 2 298 |
-| Replays downloaded (10–40 min games; 59 had no replay: HTTP 404) | 174 | 45 | 129 |
-| `.rlog` recordings made in-game this run | `RLOG_MADE` | 45 | `RLOG_REST` |
-| `.rlog` recordings analysed (exactly 2 players) | `RLOG_ANALYSED` | 45 | `RLOG_ANALYSED_REST` |
+| Replays downloaded (10–40 min games; 105 had no replay: HTTP 404) | 238 | 45 | 193 |
+| `.rlog` recordings made in-game this run (26 downloaded replays left at the 09:05 cutoff, 1 unreadable) | 210 | 44 | 166 |
+| `.rlog` recordings analysed (exactly 2 players; incl. the pre-existing May–Beasty showcase; 1 four-player recording excluded) | 211 | 45 | 166 |
 
-- Game dates of the recorded set: 2026-07-23 → 2026-10-22. Mean MMR of the recorded set 2 210 (May 2 142, rest 2 221).
-- Recording throughput 1:54–2:12 per replay at 12–20× sim speed, 0 recorder errors, 1 unreadable `.rec` skipped.
-  Raw data: 751 MB of `.rlog`, 190 MB of `.rec` (git-ignored).
+- Game dates of the recorded set: 2026-07-23 → 2026-10-22. Mean MMR of the analysed set 2 199 (May 2 142, rest 2 206).
+- Six recording batches, 1:54–2:29 per replay (playback runs at ≈ 17–19× real time), 0 recorder errors.
+  Raw data: 1 078 MB of `.rlog`, 249 MB of `.rec` (git-ignored).
+- `Scar_DoString("A4D_Speed(128)")` was tested as a faster playback switch: in build 11308's replay SCAR console both
+  `Scar_DoString` and `A4D_Speed` are nil (the call errors). The recorder already requests `Game_SetSimRate(1000)`;
+  playback is bound by one sim tick per rendered frame, so the speed ceiling is the game's frame rate.
+- **Tables in §3–§7 come from the 151-recording snapshot (06:50)** and the summary set; §8 and the Micro Rating
+  calibration use all 211 recordings. `harvest/analysis/SUMMARY.md` has the 211-recording versions of every table.
 - Cohorts: "May" = games/sides involving May (profile 10307814, mostly Delhi Sultanate); "rest" = the other side or
   games without May. May plays almost only Delhi, so May-vs-rest differences are partly civ differences.
 
@@ -152,35 +157,36 @@ Benchmarks = median completion seconds after the age-up (1 179 summaries; civ me
 - Castle arrival 2–5 min before the opponent: 61 % WR; 2–5 min after: 39 %. Feudal timing alone barely matters
   (47–52 %).
 
-## 8. Micro: what predicts winning a fight (≈ 1 800 decided fights × 2 sides)
+## 8. Micro: what predicts winning a fight (211 recordings, 4 680 fights, 3 379 decided)
 
-| Component (per side per fight) | p25 | p50 | p75 | Higher side wins |
-|---|---:|---:|---:|---:|
-| Target priority | .62 | .81 | .95 | 54.8 % |
-| Uptime | .34 | .54 | .76 | 53.2 % |
-| Focus fire (kills with ≥ 3 attackers) | .20 | .61 | 1 | 50.7 % |
-| Kiting (shots while moving with melee ≤ 8 m) | 0 | 0 | .07 | 49.1 % |
-| Splash (multi-hit siege shots) | 0 | .11 | .57 | 63.6 % (n 22) |
-| "Low overkill" alone | .66 | 1 | 1 | **37.2 %** |
+| Component (per side per fight) | p25 | p50 | p75 | Higher side wins | n |
+|---|---:|---:|---:|---:|---:|
+| Target priority | .62 | .81 | .96 | 55.0 % | 2 579 |
+| Uptime | .37 | .57 | .78 | 55.5 % | 2 389 |
+| Focus fire (kills with ≥ 3 own-team attackers) | .20 | .62 | 1 | 52.1 % | 1 983 |
+| Kiting (shots while moving with melee ≤ 8 m) | 0 | 0 | .07 | 48.3 % | 1 036 |
+| Splash (multi-hit siege shots) | 0 | .18 | .67 | 75.0 % | 24 |
+| "Low overkill" alone | .63 | 1 | 1 | **36.3 %** | 1 958 |
 
 - The old Micro Rating rewarded low overkill, but winners overkill more because they finish more kills. v2 judges
   waste together with focus fire.
-- Lanchester (square-law) fight prediction is right in 60.4 % of decided fights (1 419 / 2 350).
+- Lanchester (square-law) fight prediction is right in 61.0 % of decided fights (2 062 / 3 379).
 
-Micro Rating v2 applied to the same recordings (score = weighted 2000+ percentile, 50 = median side):
+Micro Rating v2 (score = weighted 2000+ percentile, 50 = median side), calibrated on and applied to all 211
+recordings. v1 columns are from the 151-recording run.
 
 | Cohort | v1 p25 / median / p75 | v2 p25 / median / p75 | Higher v2 side won the fight |
 |---|---|---|---:|
-| All sides | 58.7 / 71.4 / 81.5 | 39.4 / 49.0 / 59.6 | 51.9 % (1 235 / 2 381) |
-| May sides / May games | 53.2 / 68.4 / 79.8 | 41.3 / 50.8 / 61.9 | 50.8 % (363 / 714) |
-| Rest sides / rest-only games | 59.7 / 71.9 / 81.7 | 39.1 / 48.5 / 59.1 | 52.3 % (872 / 1 667) |
+| All sides | 58.7 / 71.4 / 81.5 | 39.3 / 48.6 / 59.6 | 52.0 % (1 741 / 3 347) |
+| May sides / May games | 53.2 / 68.4 / 79.8 | 40.8 / 50.1 / 61.3 | 51.1 % (363 / 711) |
+| Rest sides / rest-only games | 59.7 / 71.9 / 81.7 | 39.1 / 48.5 / 59.5 | 52.3 % (1 378 / 2 636) |
 
-- v2 is centred where intended (median ≈ 49–51), so a grade now means "vs a 2000+ side", not "vs perfection". v1
+- v2 is centred where intended (median ≈ 49–50), so a grade now means "vs a 2000+ side", not "vs perfection". v1
   graded the median side B–A.
 - Micro explains little of who wins a fight: the better-micro side wins 52 %, while army strength (Lanchester) gets
-  60 %. At 2000+ micro differences are small next to army size, composition and upgrades. The rating is a
+  61 %. At 2000+ micro differences are small next to army size, composition and upgrades. The rating is a
   quality score, not a predictor.
-- May's sides score slightly above the rest (median 50.8 vs 48.5).
+- May's sides score slightly above the rest (median 50.1 vs 48.5).
 
 ## 9. 2D viewer upgrades (this run)
 

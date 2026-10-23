@@ -242,7 +242,7 @@ from `stats.js`, so civ variants (Delhi's free but slow research) count as the p
 its header comment carries the full method and the measurements behind each constant.
 
 - Micro Rating v2 is the percentile weighted mean: 30 % Priority + 25 % Focus + 15 % Kiting + 15 % Splash +
-  15 % Uptime. The parts are calibrated against 2000+ sides from 151 recorded games; 50 is the median side.
+  15 % Uptime. The parts are calibrated against 2000+ sides from 211 recorded games; 50 is the median side.
   Priority measures target efficiency against the best target in reach. Focus = 60 % focus-kill-share percentile
   (kills with at least three recent attackers from the killer's own team) + 40 % waste-control (overkill) percentile.
   Kiting is the mean of moving-share and chase-gain percentiles when measured for player-owned ranged army units,
@@ -250,9 +250,9 @@ its header comment carries the full method and the measurements behind each cons
   to continuous attacking. Absent parts are omitted and available weights renormalised. Letters remain S ≥ 90,
   A ≥ 75, B ≥ 60, C ≥ 45, otherwise F. The visible card shows each side's score, grade and five percentile bars;
   unmeasured parts are grey.
-- Calibration evidence (higher-metric side's win share): Priority 54.8 %, overkill/waste-control alone 37.2 %
-  (winners often focus kills despite waste), Uptime 53.2 %, Splash 63.6 % (n = 22), Focus 50.7 %, Kiting 49.1 %.
-  These are descriptive, noncausal associations in the 151-game recording sample, not evidence that increasing a
+- Calibration evidence (higher-metric side's win share): Priority 55.0 %, overkill/waste-control alone 36.3 %
+  (winners often focus kills despite waste), Uptime 55.5 %, Splash 75.0 % (n = 24), Focus 52.1 %, Kiting 48.3 %.
+  These are descriptive, noncausal associations in the 211-game recording sample, not evidence that increasing a
   component causes wins or that Micro Rating predicts the winner.
 - The card also shows each side's signed army-value swing between the cached before/after snapshots when army
   data is available. Eco windows appear for fights during overdue economy upgrades, with the player's name, delay,

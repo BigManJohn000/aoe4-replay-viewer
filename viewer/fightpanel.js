@@ -72,7 +72,7 @@
   };
   const k = (v) => (v == null ? "–" : Math.abs(v) >= 1000 ? (v / 1000).toFixed(1) + "k" : String(Math.round(v)));
   const pct = (v) => `${Math.round(v * 100)} %`;
-  const MICRO_MEDIAN = "50 = median 2000+ side (151 recorded games)";
+  const MICRO_MEDIAN = "50 = median 2000+ side (211 recorded games)";
   const MICRO_LABEL = { priority: "Priority", focus: "Focus", kiting: "Kiting", splash: "Splash", uptime: "Uptime" };
   const signed = (v) => `${v < 0 ? "−" : "+"}${k(Math.abs(v))}`;
 
@@ -194,7 +194,7 @@
     more.append(el("div", { class: "rvf-muted" },
       "Micro = Σ(weight × percentile) / Σ(available weights). Priority 30%, Focus 25%, Kiting 15%, Splash 15%, Uptime 15%. ",
       "Absent parts are omitted and the remaining weights renormalised; grey bars mean unmeasured. ",
-      "50 = median 2000+ side (151 recorded games). Letters: S ≥ 90, A ≥ 75, B ≥ 60, C ≥ 45, otherwise F."));
+      "50 = median 2000+ side (211 recorded games). Letters: S ≥ 90, A ≥ 75, B ≥ 60, C ≥ 45, otherwise F."));
     const EXPLAIN = {
       priority: "percentile of target efficiency against the best target in reach",
       focus: "60% focus-kill-share percentile + 40% waste-control (overkill) percentile",
@@ -203,7 +203,7 @@
       uptime: "percentile of attack-cycle occupancy relative to continuous attacking",
     };
     more.append(el("ul", { class: "rvf-expl" }, Object.keys(MICRO_LABEL).map((c) => el("li", {}, el("b", {}, MICRO_LABEL[c]), `: ${EXPLAIN[c]}`))));
-    more.append(el("div", { class: "rvf-muted" }, "Descriptive, noncausal calibration from 151 recorded games, not a prediction of who should win."));
+    more.append(el("div", { class: "rvf-muted" }, "Descriptive, noncausal calibration from 211 recorded games, not a prediction of who should win."));
     if (A.ecoWindows && A.ecoWindows.length) more.append(el("div", { class: "rvf-muted" },
       "Eco window: an RV_ECO upgrade delay overlapping this fight; overdue time and estimated missed resources are measured at fight start. ",
       "A non-delayed opponent who won the trade (lost less army + villager value) punished the window; an opponent who attacked but lost is labelled explicitly. ",
