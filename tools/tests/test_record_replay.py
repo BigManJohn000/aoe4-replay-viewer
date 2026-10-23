@@ -96,6 +96,42 @@ class RecordReplayTests(unittest.TestCase):
             process.kill.assert_called_once()
             process.wait.assert_called_once_with(timeout=60)
 
+    CONFIG = (b'configuration =  \r\n{\r\n\t[5] =  \r\n\t{\r\n\t\tsetting = "mouseclamp",\r\n\t\tvariantBool = true,\r\n\t},\r\n'
+              b'\t[11] =  \r\n\t{\r\n\t\tsetting = "shadows",\r\n\t\tvariantUInt = 4,\r\n\t},\r\n'
+              b'\t[12] =  \r\n\t{\r\n\t\tsetting = "resolution",\r\n\t\tvariantString = "1920:1080:0:0",\r\n\t},\r\n}\r\n')
+
+    def test_recording_graphics_lower_only_listed_settings_and_restore_exactly(self):
+        with tempfile.TemporaryDirectory() as temp:
+            config, backup = Path(temp) / 'configuration_system.lua', Path(temp) / 'backup'
+            config.write_bytes(self.CONFIG)
+            with patch.multiple(self.recorder, GAME_CONFIG=config, CONFIG_BACKUP=backup):
+                self.assertTrue(self.recorder.lower_graphics())
+                low = config.read_bytes()
+                self.assertIn(b'variantUInt = 0,\r\n', low)
+                self.assertIn(b'variantString = "1280:720:0:0",\r\n', low)
+                self.assertIn(b'variantBool = true,\r\n', low)  # mouseclamp is not a graphics setting
+                self.assertEqual(low.count(b'\r\n'), self.CONFIG.count(b'\r\n'))
+                self.recorder.restore_graphics()
+            self.assertEqual(config.read_bytes(), self.CONFIG)
+            self.assertFalse(backup.exists())
+
+    def test_recording_after_a_crashed_run_keeps_the_players_settings(self):
+        with tempfile.TemporaryDirectory() as temp:
+            config, backup = Path(temp) / 'configuration_system.lua', Path(temp) / 'backup'
+            config.write_bytes(self.CONFIG)
+            with patch.multiple(self.recorder, GAME_CONFIG=config, CONFIG_BACKUP=backup):
+                self.recorder.lower_graphics()  # the run dies here: no restore
+                self.recorder.lower_graphics()
+                self.recorder.restore_graphics()
+            self.assertEqual(config.read_bytes(), self.CONFIG)
+
+    def test_no_game_configuration_launches_unchanged(self):
+        with tempfile.TemporaryDirectory() as temp:
+            config, backup = Path(temp) / 'configuration_system.lua', Path(temp) / 'backup'
+            with patch.multiple(self.recorder, GAME_CONFIG=config, CONFIG_BACKUP=backup):
+                self.assertFalse(self.recorder.lower_graphics())
+            self.assertFalse(config.exists() or backup.exists())
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -16,7 +16,9 @@ to viewer/data/<name>.js. The replay defaults to the game's playback/temp.rec (y
 
 Speed: the game advances at most one sim tick (1/8 s) per rendered frame, so playback runs at FPS / 8 whenever the
 requested rate is higher. The default asks for more than any frame rate delivers, i.e. as fast as the game renders.
-Recordings at 8x, 16x and uncapped give the same unit positions.
+Recordings at 8x, 16x and uncapped give the same unit positions. To render faster the game is launched at
+RECORDING_GRAPHICS (lowest settings, 720p, vsync off; same records); the player's configuration is restored once the
+game has closed. --keep-open leaves the game up to watch, so it keeps the player's settings.
 
 All console input is posted to the game window in the background; the script never
 focuses the game. Launching the game brings it up once; switch away whenever you like.
@@ -112,6 +114,43 @@ def documents_dir() -> Path:
 USER_DIR = documents_dir() / "My Games" / "Age of Empires IV"
 PLAYBACK_DIR = USER_DIR / "playback"
 LOG_DIR = USER_DIR / "LogFiles"
+GAME_CONFIG = USER_DIR / "configuration_system.lua"
+CONFIG_BACKUP = USER_DIR / "configuration_system.lua.recorder-backup"
+
+# Graphics while recording. Nobody watches, and the game advances one sim tick per rendered frame, so cheaper frames
+# record faster: a 14-minute replay played back at 17.1-17.2x with the player's own settings and 19.1-19.8x with
+# these, with identical records. The values are the settings menu's lowest; vsync off only changes the display.
+RECORDING_GRAPHICS = {
+    "graphicsquality": "0", "shadows": "0", "shadowfilter": "0", "ambientocclusion": "0", "volumetriclighting": "0",
+    "reflections": "0", "effectsdensity": "0", "effectsfidelity": "0", "physics": "0", "animationquality": "0",
+    "worldviewquality": "0", "modeldetail": "0", "terraindetail": "0", "antialiasing": "0.00000",
+    "verticalsync": "false", "resolution": '"1280:720:0:0"',
+}
+
+
+def lowered_graphics(config: str) -> str:
+    """configuration_system.lua text with every RECORDING_GRAPHICS setting replaced and everything else untouched."""
+    def low(m: re.Match) -> str:
+        return m[1] + RECORDING_GRAPHICS[m[2]] + m[4] if m[2] in RECORDING_GRAPHICS else m[0]
+    return re.sub(r'(setting = "(\w+)",\s*\n\s*variant\w+ = )([^,\r\n]+)(,)', low, config)
+
+
+def restore_graphics() -> None:
+    """Put back the player's configuration saved by lower_graphics, also one left behind by a run that died."""
+    if CONFIG_BACKUP.exists():
+        os.replace(CONFIG_BACKUP, GAME_CONFIG)
+
+
+def lower_graphics() -> bool:
+    """Save the player's configuration and switch the game to RECORDING_GRAPHICS for the next launch. The game must
+    be closed. Returns False when the game has no configuration file yet."""
+    restore_graphics()  # never save a lowered configuration as the player's own
+    if not GAME_CONFIG.exists():
+        return False
+    shutil.copyfile(GAME_CONFIG, CONFIG_BACKUP)
+    atomic_write_text(GAME_CONFIG, lowered_graphics(GAME_CONFIG.read_bytes().decode("utf-8")))
+    return True
+
 
 
 def minify(src: str) -> str:
@@ -426,11 +465,12 @@ def record(src: Path, rec: recfile.Replay, speed: float, keep_open: bool) -> tup
     if STEAM_EXE is None:
         raise RecordError("Steam is not installed (no SteamExe in the registry)")
     name = stage_replay(src)
-    started = time.time()
-    subprocess.Popen([str(STEAM_EXE), "-applaunch", APP_ID, "-dev", "-replay", f"playback:{name}"])
-    print("Launching game (it will pop up once; feel free to switch away)...")
     identity = None
+    lowered = not keep_open and lower_graphics()  # --keep-open leaves the game up to watch: keep the player's look
+    started = time.time()
     try:
+        subprocess.Popen([str(STEAM_EXE), "-applaunch", APP_ID, "-dev", "-replay", f"playback:{name}"])
+        print("Launching game (it will pop up once; feel free to switch away)...")
         deadline = time.time() + 180
         while identity is None and time.time() < deadline:
             candidate = game_identity(ai.game_pid())
@@ -505,6 +545,11 @@ def record(src: Path, rec: recfile.Replay, speed: float, keep_open: bool) -> tup
     finally:
         if not keep_open:
             close_game(identity)
+        if lowered:
+            if ai.game_pid() is None:
+                restore_graphics()
+            else:  # it would write the lowered settings back on exit; the next recording or watch restores them
+                print(f"  the game is still running; your graphics settings stay saved in {CONFIG_BACKUP}")
     return out, health.complete(duration)
 
 

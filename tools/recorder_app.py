@@ -749,6 +749,7 @@ class App:
             # Watch's explicit restart confirmation attaches to this one process, never all game processes.
             rr.close_game(rr.game_identity(ai.game_pid()))
             self.watch_text("Starting Age of Empires IV...")
+        rr.restore_graphics()  # Watch shows the player's own settings, also after a recording that died mid-run
         name = rr.stage_replay(src)
         started = time.time()
         subprocess.Popen([str(rr.STEAM_EXE), "-applaunch", rr.APP_ID, "-dev", "-replay", f"playback:{name}"])

@@ -64,7 +64,9 @@ Python 3.12 embeddable package with `psutil`).
    Empires server (the player must share match history), saved as `replays/aoe4world/aoe4_<game id>.rec`, plus
    AoE4World's match summary (scores, APM, result) beside it as `.summary.json`.
 4. The match records in the game, one at a time, with progress on the page. Close the game first; recording runs in
-   the background and never takes focus. You can keep using the PC.
+   the background and never takes focus. You can keep using the PC. While it records, the game runs at its lowest
+   graphics settings (720p, vsync off), which plays replays about 13% faster and records exactly the same data; your
+   own settings come back when the game closes (after a crash, at the next recording or **Watch in game**).
 5. When the row says **Done**, press **2D** or **▶ 3D**.
 
 The replay must come from the game version you have installed; matches from another version are flagged rather than
