@@ -137,16 +137,21 @@ def tech_info(name: str) -> tuple[str, str] | None:
     return None
 
 
-def tech_list(log: Log, by_id: dict[int, Ent]) -> list[list]:
-    """[t, player, label, kind] for every age-up and eco tech whose researching building is known."""
+def tech_list(log: Log, by_id: dict[int, Ent]) -> tuple[list[list], int]:
+    """Age-up/eco rows [t, player, label, kind], plus the count omitted for an unknown researching entity."""
     out = []
+    unknown_executers = 0
     for u in log.upgrades:
         info = tech_info(u["fields"].get("upgrade", "")[1:])
+        if not info:
+            continue
         ex = by_id.get(entity_ref(u["fields"].get("executer")))
-        if info and ex:
-            out.append([u["t"], ex.owner, *info])
+        if ex is None:
+            unknown_executers += 1
+        else:
+            out.append([u["t"], ex.owner_at(u["t"]), *info])
     out.sort(key=lambda r: r[0])
-    return out
+    return out, unknown_executers
 
 
 def gaia_category(bp: str, amount: int) -> str:
@@ -189,7 +194,7 @@ class Ent:
         return tr[4 * i + 1], tr[4 * i + 2], tr[4 * i + 3]
 
     def alive_at(self, t: float) -> bool:
-        return any(s <= t and (e is None or t <= e) for s, e in self.spans)
+        return any(s <= t and (e is None or t < e) for s, e in self.spans)
 
     def owner_at(self, t: float) -> int:
         """The owner at time t (conversions and captures change it; `owner` is only the first)."""
@@ -384,7 +389,7 @@ def entity_value(e: Ent, costs: dict[tuple[int, str], dict]) -> float:
     c = costs.get((e.owner, e.bp))
     if not c:
         return 0.0
-    total = sum(v for k, v in c["cost"].items() if k.lower() in RESOURCES)
+    total = sum(v for k, v in c["cost"].items() if k.lower() in RESOURCES or k.lower() == "merc_byz")
     return total / c["squad"] if c["squad"] > 0 else total
 
 
@@ -395,9 +400,11 @@ def detect_fights(log: Log, values: dict[int, float], world: float) -> list[dict
         if classify(e.bp, e.building) in NON_COMBAT:
             continue
         tr = e.track
+        # Tracks contain changes, not every sample: quiet time is not a gap. Only an ENT_NEW re-entry resets HP.
+        span_starts = {s for s, _end in e.spans}
         for i in range(4, len(tr), 4):
             dmg = tr[i - 1] - tr[i + 3]
-            if dmg > 0.5 and tr[i] - tr[i - 4] <= 1.01:
+            if dmg > 0.5 and tr[i] not in span_starts:
                 events.append((tr[i], tr[i + 1], tr[i + 2], e.owner_at(tr[i]), dmg, e.id, False))
         if e.killed:
             x, z, _ = e.position_at(e.died)
@@ -589,20 +596,17 @@ def conversion_casts(rep: recfile.Replay, log: Log) -> list[list]:
             by_squad[e.squad].append(e)
     by_id = {e.id: e for e in log.ents}
 
-    def alive(e, t: float) -> bool:
-        return any(a <= t and (b is None or t < b) for a, b in e.spans)
-
     out = []
     for a in rep.abilities():
         kind = CONVERSION_ABILITIES.get(a.pbgid)
         if kind is None:
             continue
         t = a.time
-        casters = [e for c in a.casters for e in (by_squad.get(c, []) if a.squads else [by_id.get(c)]) if e and alive(e, t)]
+        casters = [e for c in a.casters for e in (by_squad.get(c, []) if a.squads else [by_id.get(c)]) if e and e.alive_at(t)]
         target = 0
         if kind == "target" and a.target and a.target[0] in ("entity", "squad"):
             pool = [by_id.get(a.target[1])] if a.target[0] == "entity" else by_squad.get(a.target[1], [])
-            target = next((e.id for e in pool if e and alive(e, t)), 0)
+            target = next((e.id for e in pool if e and e.alive_at(t)), 0)
         out += [[t, e.id, target] for e in casters]
     return out
 
@@ -664,6 +668,15 @@ def load_summary(rlog: Path, rec_path: Path, players: list[dict]) -> dict | None
     return {k: v for k, v in block.items() if v not in (None, {})}
 
 
+def write_index() -> None:
+    """Refresh the replay and note catalogs; keep one window assignment per line for the 3D portal."""
+    names = sorted(p.stem for p in DATA_DIR.glob("*.js") if p.stem != "index")
+    # The 2D viewer only probes notes listed here, avoiding missing-file console errors.
+    noted = sorted(p.stem for p in (DATA_DIR.parent / "notes").glob("*.js"))
+    (DATA_DIR / "index.js").write_text(f"window.REPLAY_INDEX = {json.dumps(names)};\n"
+                                       f"window.REPLAY_NOTED = {json.dumps(noted)};\n", encoding="utf-8")
+
+
 def convert(rlog: Path, rec_path: Path) -> Path:
     """Build viewer/data/<rlog stem>.js from a recorder log and its replay; returns the output path."""
     rep = recfile.load(rec_path)
@@ -688,6 +701,7 @@ def convert(rlog: Path, rec_path: Path) -> Path:
             squad_owner[e.squad] = e.owner
 
     players = match_players(log, rep)
+    techs, unknown_executers = tech_list(log, by_id)
     data = {
         "format": 1,
         "name": rlog.stem,
@@ -708,7 +722,7 @@ def convert(rlog: Path, rec_path: Path) -> Path:
         "orders": {str(sid): [v for o in seq for v in o] for sid, seq in log.orders.items() if sid in squad_owner},
         "kills": kills,
         "upgrades": log.upgrades,
-        "techs": tech_list(log, by_id),
+        "techs": techs,
         "constructions": log.constructions,
         "stats": {str(k): v for k, v in log.stats.items()},
         # J records, per player: [t, villagers gathering food, wood, gold, stone, other] every 2 s
@@ -731,15 +745,11 @@ def convert(rlog: Path, rec_path: Path) -> Path:
     payload = json.dumps(data, separators=(",", ":"), ensure_ascii=False)
     out.write_text(f"(window.REPLAY_DATA = window.REPLAY_DATA || {{}})[{json.dumps(rlog.stem)}] = {payload};\n",
                    encoding="utf-8")
-    names = sorted(p.stem for p in DATA_DIR.glob("*.js") if p.stem != "index")
-    # recordings with key-moment notes (viewer/notes/<name>.js): the 2D viewer loads only these, so a missing one is
-    # never probed (a 404 in the console)
-    noted = sorted(p.stem for p in (DATA_DIR.parent / "notes").glob("*.js"))
-    (DATA_DIR / "index.js").write_text(f"window.REPLAY_INDEX = {json.dumps(names)};\n"
-                                       f"window.REPLAY_NOTED = {json.dumps(noted)};\n", encoding="utf-8")
+    write_index()
 
     print(f"{len(log.ents)} entities, {len(log.gaia)} map objects, {len(log.attacks)} attack samples, "
           f"{len(kills)} kills, {len(data['fights'])} fights, {len(log.costs)} costs, "
+          f"{unknown_executers} upgrades dropped (unknown executer), "
           f"{len(log.errors)} recorder errors -> {out} ({out.stat().st_size // 1024} KB)")
     print(trends.update())
     return out

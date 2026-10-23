@@ -80,13 +80,13 @@ def find_game_dir() -> Path | None:
 RECORDER = ROOT / "recorder" / "recorder.lua"
 CHUNK = 350
 SIM_TICKS_PER_SECOND = 8
-SAMPLE_INTERVAL = 0.5  # the recorder's sampling period, RR_INTERVAL in recorder/recorder.lua
+# Complete recordings can finish 1.0 s before the replay duration; allow one extra simulation tick of headroom.
+END_SAMPLE_TOLERANCE = 1.125
 
 
 def reached_end(last_t: float, duration: float) -> bool:
-    """Whether a recording's last T record is the replay's final sample: one lands in every SAMPLE_INTERVAL, so an
-    earlier last T means samples (and the commands between them) are missing."""
-    return last_t >= duration - SAMPLE_INTERVAL
+    """Whether the final sample is within the observed replay-end sampling tolerance."""
+    return last_t >= duration - END_SAMPLE_TOLERANCE
 
 
 def documents_dir() -> Path:
