@@ -9,9 +9,9 @@
  * combat index (frame.js RV_FRAME.combat over each side's entity table: shots, melee blows, typed damage numbers,
  * heals) and, at 120 times across the replay: per entity alive / owner / position (core.locate: the recorded motion,
  * not the re-timed place() the viewer draws) / HP, vision for every player, team and all players, display name (the 2D
- * one ends tier-I names in " I" and keeps the Tech/Defense/Viz/Resource tokens the 3D one leaves out) and unit tier; per
- * player banked resources, population and the army series; the kill order, kill feed and age-up/eco tech table (2D
- * app.js rules restated below); the FrameRenderState lists (projectiles, impacts, heals, damage numbers, engagement
+ * one ends tier-I names in " I" and keeps the Tech/Defense/Viz/Resource tokens the 3D one leaves out) and unit tier;
+ * the kill order (both Players tabs query model.js over the 2D model, and 3D draws the kill feed's rows from R.kills by
+ * index); the FrameRenderState lists (projectiles, impacts, heals, damage numbers, engagement
  * lines); the eco opportunity-cost rows (eco.js) over each side's combat index; the engagement analysis (fights.js: list
  * rows, Micro Ratings, Lanchester and what-if, tug of war, idle/late, position tags, target-fire lines, eco casualties).
  */

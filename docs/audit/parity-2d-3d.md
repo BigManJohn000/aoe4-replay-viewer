@@ -38,8 +38,10 @@ compares.**
 1. **Two replay models for one recording.** The 3D page builds *both* the 2D model (`M2 = RV.prepare(...)`,
    `viewer3d/viewer.js:973`) and its own typed-array model (`R = new Replay(data, RV_UNITS, RV_FRAME)`,
    `viewer.js:1017`). The renderer reads `R`; marks/panels read `M2`. Two parsers, two derivations, one recording.
-2. **Panel logic was ported, not shared.** `viewer3d/core/analysis.js:1-4` states it is "ported from the 2D viewer's
-   app.js (renderPlayers, techTable, the kill feed filter, jumpFight)". Five functions now exist twice.
+2. **Panel logic was ported, not shared.** `viewer3d/core/analysis.js:1-4` stated it was "ported from the 2D viewer's
+   app.js (renderPlayers, techTable, the kill feed filter, jumpFight)". Five functions existed twice. *Resolved (A2):
+   `analysis.js` is deleted; both viewers query `viewer/model.js` (`statsAt`, `armyAt`, `techTable`, `killFeed`,
+   `jumpFight`, `FIGHT_LEAD`) over the 2D model.*
 3. **Two UI shells.** 2D has a 5-tab sidebar (Fights, Players, Eco, Selection, +Moments) driven by `viewer/index.html`
    and `app.js`; 3D has a 3-tab drawer (Fights, Economy, Layers & settings) built in `index.html` + `viewer.js`.
    Labels, grouping, defaults and shortcuts are maintained separately.
@@ -54,9 +56,9 @@ compares.**
 
 | # | Item | 2D | 3D | Evidence | Severity |
 | --- | --- | --- | --- | --- | --- |
-| L1 | Army numbers in the Players panel | entity-derived live count (`RV.armyAt(M,t)`) | 5 s converter series (`ana.armyAt(R,...)`) | `viewer/app.js:684`, `viewer3d/core/analysis.js:21`; the harness compares the **series** (`parity-check.mjs:143`, comment "2D app.js renderPlayers army columns") | **High** — `parity OK` does not cover the number the 2D panel actually shows |
+| L1 | Army numbers in the Players panel | entity-derived live count (`RV.armyAt(M,t)`) | 5 s converter series (`ana.armyAt(R,...)`) | `viewer/app.js:684`, `viewer3d/core/analysis.js:21`; the harness compares the **series** (`parity-check.mjs:143`, comment "2D app.js renderPlayers army columns") | **Resolved (A2):** both panels show `RV.armyAt(M,t)` |
 | L2 | What counts as a unit | `RV.isUnit` excludes `building`, `attachment`, **`other`** | `isUnit` excludes only `building`, `attachment` → `other` is a unit | `viewer/model.js:673` vs `viewer3d/core/replay.js:130`; 3D patches around it at `viewer.js:1223,3479` | Medium — a classification difference (3 `other` entities in the aggregate). It does not reach army or "On screen" totals: `panels.js:70-72` filters military/villager types and Players uses the converter series |
-| L3 | Fight jump (`[` / `]`) | lead 5 s, "next if `start > t+1`" | lead 3 s, "next if `start − lead > t+0.5`" | `viewer/app.js:150,389` vs `viewer3d/viewer.js:309,4137`, `core/analysis.js:59` | Medium — same key lands on a different fight near edges |
+| L3 | Fight jump (`[` / `]`) | lead 5 s, "next if `start > t+1`" | lead 3 s, "next if `start − lead > t+0.5`" | `viewer/app.js:150,389` vs `viewer3d/viewer.js:309,4137`, `core/analysis.js:59` | **Resolved (A2):** both call `RV.jumpFight` with `RV.FIGHT_LEAD` = 5 s |
 | L4 | Fight list ranking | `value + 0.01·damage` | `RV_FIGHTS.impact` (resources + forced idle + swing) | `viewer/app.js:559-562` vs `viewer3d/viewer.js:4286-4288` | Medium — "by size" ≠ "Most impactful" |
 | L5 | Water level | `M.waterLevel` computed once in the model | recomputed independently from `R.gaia` fish | `viewer/model.js:332-335` vs `viewer3d/viewer.js:1477-1481` (same constant, duplicated logic) | Low — but two formulas to keep in sync |
 | L6 | Gaia `killed` flag | dropped | kept on the entity | `viewer3d/core/replay.js:294` (`killed: r.killed`); `viewer/model.js:230` drops it | Low — 3D-only affordance (killed map objects) |
@@ -121,7 +123,7 @@ compares.**
 | Health bars | always | on (+ damaged/all) | 3D only setting |
 | Kill markers / zones / grid | always | on | 3D only settings |
 
-## 4. Synchronization plan (proposal — nothing implemented)
+## 4. Synchronization plan (proposal — step 2 implemented, step 1 deferred)
 
 Ordered by leverage per unit of risk. Steps 1-4 remove the *cause*; 5-8 stop recurrence; 9-10 close the
 product gaps.
@@ -131,10 +133,13 @@ product gaps.
    delete it once a perf comparison on the biggest recording passes. Keep `parity-check.mjs` green during the change;
    it is the migration safety net. This kills L1, L2, L5, L6, L7, L15 at the root. Move the facts the 3D model owns
    alone (`sites`, `conversions`, `flips`, `explored`, `garrisons`, `corpses`, `trips`, `builtAt`) into the one model
-   so `marks.js`/`panels.js`/`hud.js` stop borrowing `M2` while the renderer reads `R`.
-2. **Lift `core/analysis.js` into the shared folder** (`viewer/paneldata.js`): `statsAt`, `armyAt`, `techTable`,
-   `killFeed`, `jumpFight`. Both engines import it; delete the 2D copies in `app.js` or re-export them. Fixes L1 and
-   L3/L8 inconsistency by construction.
+   so `marks.js`/`panels.js`/`hud.js` stop borrowing `M2` while the renderer reads `R`. *Deferred:* after step 2 the
+   model differences left (L2, L5, L6, L7, L15) are classification, naming and duplicated-formula details that reach
+   no shared total, and the harness already compares every entity's state, so the merge is a large, medium-risk
+   refactor for little user-visible gain.
+2. **Done (A2): shared panel queries.** `statsAt`, `armyAt`, `techTable`, `killFeed`, `jumpFight` and the 5 s fight
+   lead live in `viewer/model.js`; both engines call them over the 2D model and `core/analysis.js` is gone. Fixed L1 and
+   L3 by construction.
 3. **One option/shortcut registry** (`viewer/ui-options.js` or `.json`): id, label, group, default, applies-to,
    shortcut, mutually-exclusive group. Both pages render their controls from it, so §3.4 cannot drift again, and a
    test asserts both pages expose the same ids/defaults.

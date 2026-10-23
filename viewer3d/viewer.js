@@ -298,6 +298,8 @@ const TURN_RATE = 2.5 * Math.PI; // fastest turn on foot (rad per replay s); rid
 const DOOR_FADE = 0.25;        // a unit shrinks into / grows out of a building's door over this (replay s)
 const RUIN_FALL = 2.5;         // a destroyed building sinks into its rubble over this (replay s)
 const RUIN_SECS = 12;          // the rubble stays this long after the destruction, sinking away over its last 1.5 s
+const CREW_SEAT = 3.37;        // a tower crew stands this high on its war elephant (m at model scale): the basket_m
+                               // bind height in the sul armour, armour upgrade and tug healer GLBs alike
 const KILL_MARK_SECS = 2.5;    // kill marker lifetime (replay seconds)
 const KILL_COLOR = '#ed7965';
 const ADAPT_NEAR = 60, ADAPT_FAR = 280; // adaptive unit scale: true size at ≤ NEAR m camera distance, slider value at ≥ FAR
@@ -2450,13 +2452,16 @@ const eyes = new SuperviseEyes(scene);
 // on the pose straight playback shows:
 //   locomotion  idle ↔ gait by speed (walk/jog/run/sprint; a villager's tool_/carry_ forms while it holds a tool or
 //               a load), phased by the ground covered (odometer over the track) over the clip's root motion (index
-//               `move`), so the feet keep pace with the ground at any speed and stop when the unit does;
+//               `move`), so the feet keep pace with the ground at any speed and stop when the unit does; an arrival
+//               that pauses plays the stop clip as the unit settles;
 //   combat      guard (shooters: aim) while engaged (combatAt); every blow (Replay.buildBlows) plays its attack,
 //               torch throw or fire clip placed so that the clip's strike frame (index `hit`) lands on the blow's
 //               impact or loose, and shooters reload after each shot; rider clips (`part: 'rider'`) move only the
 //               rider, over the horse's own gait;
 //   reactions   a flinch at each recorded HP drop; the death clip from the recorded death, then the body sinks;
-//   work        a villager at a stand loops its job's clip; weapon, torch, tool or load (prop joints) follow the state.
+//   work        a villager at a stand loops its job's clip and plays its load's dropoff clip where a load walk ends; a
+//               monk loops its heal clip through the heals it gives (frame.js C.heals); weapon, torch, tool or load
+//               (prop joints) follow the state. A tower crew (Replay.seatCrews) stands CREW_SEAT up, in its elephant.
 
 const DEATH_SECS = 10; // a killed unit lies this long (replay s), sinking away over the last 1.5 s
 const XF = 0.12;       // crossfade between consecutive clips of a sequence (replay s)
@@ -2467,7 +2472,8 @@ const JOB_KEY = [null, 'build', 'farm', 'wood', 'gold', 'stone', 'berry', 'meat'
 const GAITS = { '': ['walk', 'jog', 'run', 'sprint'], tool_: ['tool_walk', 'tool_run'], carry_: ['carry_walk', 'carry_run'] };
 const GAIT_U = { walk: 1.6, jog: 3, run: 4.2, sprint: 6 }; // m/s for gait clips without root motion (reindeer)
 const CLIP_STATES = ['idle', 'guard', 'aim', 'fire', 'reload', 'attack', 'convert', 'throw', 'flinch', 'death', 'dead',
-  'work', 'tool_idle', 'carry_idle', ...Object.values(GAITS).flat()];
+  'work', 'tool_idle', 'carry_idle', 'stop', 'dropoff', 'heal', ...Object.values(GAITS).flat()];
+const STOP_LEAD = 0.15; // a stop clip starts this long before the arrival, as the ground speed (over ±0.15 s) falls
 const sstep = THREE.MathUtils.smoothstep;
 
 const ANIMS = (await getJson('assets/anims/index.json')) ?? { archetypes: {}, blueprints: {} };
@@ -2577,6 +2583,46 @@ function cruiseOf(o, T, X, Z, win) {
   }
   sp.sort((a, b) => a - b);
   return (o.cruise = sp.length ? sp[sp.length >> 1] : 0);
+}
+/**
+ * Arrivals that pause (memoized on e.stopT): the sample times ending a move of over 0.3 m after which e stands for at
+ * least 0.25 s, off any villager job (a work stand plays its work clip, a drop-off its dropoff clip).
+ */
+function stopsOf(e) {
+  if (e.stopT) return e.stopT;
+  const out = [], n = e.t.length;
+  for (let k = 1; k < n; k++) {
+    if (e.job?.[k] || Math.hypot(e.x[k] - e.x[k - 1], e.z[k] - e.z[k - 1]) <= 0.3) continue;
+    let j = k + 1;
+    while (j < n && Math.hypot(e.x[j] - e.x[j - 1], e.z[j] - e.z[j - 1]) <= 0.1) j++;
+    if (j === n || Math.max(e.t[j - 1], e.t[j] - SAMPLE) - e.t[k] >= 0.25) out.push(e.t[k]);
+  }
+  return (e.stopT = Float64Array.from(out));
+}
+/**
+ * A villager's drop-offs (memoized on e.drops): T, the sample times its load walk (a CARRY code) ends at a drop-off,
+ * and J, the JOBS index of the load.
+ */
+function dropsOf(e) {
+  if (e.drops) return e.drops;
+  const T = [], J = [], carry = (c) => c > CARRY && c < HOLD;
+  for (let k = 1; k < e.t.length; k++) if (carry(e.job[k - 1]) && !carry(e.job[k])) { T.push(e.t[k]); J.push(e.job[k - 1] - CARRY); }
+  return (e.drops = { T: Float64Array.from(T), J });
+}
+/**
+ * The heals e gives (frame.js C.heals: HP rising beside a still religious unit), merged into spans less than 1 s
+ * apart and memoized on e.heal: { T0, T1 } sorted by start.
+ */
+function healsOf(e) {
+  if (e.heal) return e.heal;
+  const T0 = [], T1 = [];
+  for (const h of R.combat.heals) {
+    if (h.healer !== e) continue;
+    const k = T0.length - 1;
+    if (k >= 0 && h.t0 - T1[k] < 1) T1[k] = Math.max(T1[k], h.t1);
+    else { T0.push(h.t0); T1.push(h.t1); }
+  }
+  return (e.heal = { T0: Float64Array.from(T0), T1: Float64Array.from(T1) });
 }
 /**
  * Gait blend position at ground speed v for gaits G drawn at entry scale es: k = gait k, a fraction blends k and k + 1
@@ -2753,9 +2799,32 @@ function unitAnim(e, v, t, c, i, es) {
     if (h && !h.rider) act += w;
   }
   if (b && !b.torch && e.job) tool = JOBS[J_WOOD].tool; // villagers fight with the axe
-  // stance and locomotion share the rest: idle (guard, or aim for shooters, while engaged) ↔ gait by speed
-  const rest = 1 - Math.min(1, act), pre = code > HOLD ? 'tool_' : code > CARRY ? 'carry_' : '';
+  const pre = code > HOLD ? 'tool_' : code > CARRY ? 'carry_' : '';
   const G = gaitsOf(v, T, pre, seed), mv = G.length ? sstep(vs, 0.2, 0.8) : 0;
+  // pauses off a fight: a monk's heal loops through the heals it gives (easing in and out), a villager's dropoff plays
+  // from the end of its load walk and anyone's stop clip from an arrival, each only as far as the unit stands still
+  if (!b) {
+    let h = null, w = 0, x = 0;
+    const H = T.heal.length ? healsOf(e) : null, hk = H ? idxAt(H.T0, t + 0.3) : -1;
+    if (hk >= 0 && t < H.T1[hk] + 0.4) {
+      h = oneOf(T.heal, seed); x = loopT(h, t - H.T0[hk] + seed * h.dur);
+      w = sstep(t, H.T0[hk] - 0.3, H.T0[hk]) * (1 - sstep(t, H.T1[hk], H.T1[hk] + 0.4));
+    } else if (e.job && !(code && code < CARRY)) {
+      const D = dropsOf(e), dk = idxAt(D.T, t), d0 = dk >= 0 ? D.T[dk] : -Infinity;
+      h = t - d0 < 3 ? oneOf(clipTable(e.bp, style ?? JOB_KEY[D.J[dk]]).dropoff, seed) : null; // the load's job set
+      if (h) { x = holdT(h, t - d0); w = win(t, d0, d0 + h.dur); }
+    }
+    if (!h && !code && T.stop.length) {
+      const S = stopsOf(e), sk = idxAt(S, t + STOP_LEAD);
+      if (sk >= 0 && t - S[sk] < 3) { h = oneOf(T.stop, seed); const s0 = S[sk] - STOP_LEAD; x = holdT(h, t - s0); w = win(t, s0, s0 + h.dur); }
+    }
+    if (h && w > 0) {
+      w = mixAdd(h, x, w * (1 - mv) * (1 - Math.min(1, act)));
+      if (!h.rider) act += w;
+    }
+  }
+  // stance and locomotion share the rest: idle (guard, or aim for shooters, while engaged) ↔ gait by speed
+  const rest = 1 - Math.min(1, act);
   const idle = oneOf(T[`${pre}idle`].length ? T[`${pre}idle`] : T.idle, seed);
   const st = pre ? null : oneOf(T.ranged && T.aim.length ? T.aim : T.guard, seed), ge = st ? eng : 0;
   if (st?.rider) mixAdd(st, loopT(st, t + seed * st.dur), ge); // a horse archer's rider aims over the horse
@@ -3322,7 +3391,7 @@ function passesFilters(e, t) {
 const CROWD_K = 0.7, CROWD_MARGIN = 1, CROWD_RMAX = 1.2, CROWD_MASK = 4095;
 class CrowdCap {
   constructor() {
-    this.units = R.ents.filter((e) => e.isUnit);
+    this.units = R.ents.filter((e) => e.isUnit && !e.mount); // a tower crew takes its mount's scale (updateEntities)
     this.unitR = Float32Array.from(this.units, (e) =>
       e.cat === 'cavalry' || /mounted|scout/.test(e.bp) ? 0.9 : e.cat === 'siege' ? CROWD_RMAX : e.cat === 'livestock' ? 0.5 : 0.4);
     // live gaia animals show at 0.8× (body 0.5 → 0.4), a carcass at the fallen sheep's size (GaiaLayer.updateObject)
@@ -3467,7 +3536,7 @@ function updateEntities(t) {
     const c = combatAt(e, t);
     e.foe = c.ref && (c.blow || c.eng > 0.5) && !c.ref.guess ? c.ref.b : null; // tether target (none for a guessed fort shot)
     const until = e.died == null ? -Infinity : e.isBuilding ? e.died + RUIN_SECS : e.corpseT ?? e.died + DEATH_SECS;
-    const dying = !e.on && (e.isUnit || e.isBuilding) && t >= e.died && t < until;
+    const dying = !e.on && !e.mount && (e.isUnit || e.isBuilding) && t >= e.died && t < until; // crews go with the mount
     if ((!e.on && !dying) || (e.on && e.hid)) { // gone, or garrisoned
       e.shown = false;
       if (e.hid) e.foe = null;
@@ -3482,6 +3551,10 @@ function updateEntities(t) {
     const li = e.pi;
     e.gy = terrain.heightAt(e.px, e.pz);
     if (WATER_LEVEL != null && e.gy < WATER_LEVEL - WATER_DRAFT && /naval|boat/.test(e.bp)) e.gy = WATER_LEVEL - WATER_DRAFT; // ships float
+    if (e.mount) { // a tower crew stands in its elephant's basket (bars, picking and shots follow e.gy)
+      e.us = e.mount.us;
+      e.gy += CREW_SEAT * (ASSET_MAP[e.mount.bp]?.scale ?? 1) * tweakOf(e.mount.bp, e.mount.id).scale * e.us;
+    }
     if (e.isUnit && e.on) _walkers.push(e);
     const vis = passesFilters(e, at);
     e.shown = vis && e.on; // corpses get no bars, picking or counts

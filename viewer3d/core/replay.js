@@ -37,6 +37,8 @@ const WALL_FREE = 0.25;        // a link within ~75° of a wall piece's line hol
 // m, s, m, m: a unit standing by a building supervising it (supervision); recorded tax stops last 12–17 s, and a unit
 // at a building's very centre is inside it (garrisoned, dropping off)
 const SUP_STILL = 1, SUP_MIN = 30, SUP_REACH = 3, SUP_INSIDE = 1;
+// Tower crews (Replay.seatCrews) and the war elephants they ride
+const CREW_BP = /^unit_war_elephant_tower_(archer|handcannoneer|monk)_/, MOUNT_BP = /^unit_war_elephant_/;
 // Mongol buildings on the move (Replay.trips) pack for PACK_SECS, roll as a cart (sample steps over ROLL_STEP m) and
 // stand again at their next construction event within UNPACK_MAX s of arriving (the recorder logs one as an unpacking
 // completes: 1.1–5.6 s after arriving in aoe4_256767395), else UNPACK_SECS after it. A stop stays inside one trip
@@ -132,12 +134,13 @@ function prepEntity(r) {
     builtAt: -Infinity, wall: null, arms: null, sup: null, cons: null, trips: null, seed: hash01(r.id),
     // combat and work (blows from the shared combat index, frame.js RV_FRAME.combat / villagerJobs)
     blows: null, stT: null, hitT: null, job: null, jobX: null, jobZ: null, jobT0: null, jobT1: null, jobOut: null,
-    // animation timing (Replay.standToStrike / deathDrift / garrisons / sheepCorpses)
-    mv: null, exV: null, garr: null, corpseT: null, corpseH: null,
+    // animation timing (Replay.standToStrike / deathDrift / garrisons / sheepCorpses); mount: the war elephant a tower
+    // crew rides (Replay.seatCrews)
+    mv: null, exV: null, garr: null, corpseT: null, corpseH: null, mount: null,
     // frame facts (Replay.updateFrame)
     on: false, hid: false, px: x[0], pz: z[0], php: hp[0], pown: r.owner, pi: 0,
-    // renderer-owned per-frame slots (viewer.js)
-    shown: false, gy: 0, view: null, foe: null, us: 1,
+    // renderer-owned slots (viewer.js): per frame, and the stop / drop-off / heal clip timings it memoizes
+    shown: false, gy: 0, view: null, foe: null, us: 1, stopT: null, drops: null, heal: null,
   };
 }
 
@@ -433,6 +436,7 @@ export class Replay {
     this.standToStrike();
     this.deathDrift();
     this.garrisons();
+    this.seatCrews();
 
     this.fights = d.fights ?? [];
     this.army = d.army ?? null;
@@ -444,6 +448,21 @@ export class Replay {
   }
 
   isMilitary(cat) { return this.military.has(cat); }
+
+  /**
+   * Tower crews: a tower elephant's archers, handcannoneers or monks are entities of their own (ebps
+   * attachment_child_ext) recorded within ~0.6 m of their mount, with the two ids after it (aoe4_256564163: 13 archer
+   * pairs, 5 monk pairs). Sets e.mount on each crew member.
+   */
+  seatCrews() {
+    for (const e of this.ents) {
+      if (!CREW_BP.test(e.bp)) continue;
+      for (let k = 1; k <= 2 && !e.mount; k++) {
+        const m = this.byId.get(e.id - k);
+        if (m && MOUNT_BP.test(m.bp) && !CREW_BP.test(m.bp)) e.mount = m;
+      }
+    }
+  }
 
   /** Time of the last neutral scan at or before t (the SCAN cadence at the recorded phase), or null without amounts. */
   scanAt(t) { return this.scanPhase == null ? null : this.scanPhase + SCAN * Math.floor((t - this.scanPhase) / SCAN); }

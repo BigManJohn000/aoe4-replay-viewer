@@ -169,8 +169,14 @@ work, death, carry_idle`. "Present" counts `@style` variants.
 | base_civilian | worker | carry_idle |
 | base_butcher / farmer / fisherman / forager / logger / miner | job sets | idle, walk, jog, run, sprint, death — **by design**; these are only reached through `jobs{}` and fall back to `base_civilian` for locomotion (base_miner also lacks `carry_idle`) |
 
-`base_elephant_archer` is the worst: it has idle/aim/fire/reload/flinch/death only, so the 2 elephant-archer
-blueprints stand still (idle) while moving and have no attack clip.
+`base_elephant_archer` looks worst on paper (idle/aim/fire/reload/flinch/death only), but it is the **tower crew rig**,
+not a walking unit: its 2 blueprints (`unit_war_elephant_tower_archer_*`) are attachment entities (ebps
+`attachment_child_ext`) that ride a tower elephant, 2 per mount, recorded within 0.36–0.63 m of it with the mount's
+id + 1 / + 2 (26 crew entities in `aoe4_256564163`). They need no gait or melee clip. **Real defect, fixed:** the crew
+stood at ground level, hidden inside the elephant; `Replay.seatCrews` now links each crew member to its mount and the
+viewer stands it `CREW_SEAT` = 3.37 m up (the `basket_m` bind height shared by the sul armour, armour-upgrade and tug
+healer elephant GLBs), at its mount's scale. Monk crews (`unit_war_elephant_tower_monk_*`) ride the healer elephant the
+same way. Every recorded `base_elephant_combined` user is melee (combat.json), so it needs no aim/fire/reload.
 
 ### 1.5 Weapon overlays (`@<weapon>`)
 
@@ -354,7 +360,8 @@ base_shaolin), `mount` + `dismount` (2: base_horse_combined — the rider is alw
 `dropoff` (8: 7 worker/civilian sets + base_horse_combined), `tool_idle@herd`/`tool_walk@herd`/`tool_run@herd`
 (3: base_butcher; `herd`
 is in `blueprints.jobs` but **not in `JOB_KEY`**, so the key is never passed), and `attack@swing` on
-base_heavy_spearman (2; only `base_spearman` is ever assigned style `swing`). **Total 58 dead clips.**
+base_heavy_spearman (2; only `base_spearman` is ever assigned style `swing`). **Total 58 dead clips.** *Since wired
+(B1): `stop`, `stop@arquebus`, `dropoff` (7 worker/civilian sets) and `heal` — 50 clips; see Checklist 2.*
 
 `dead` is *not* dead wiring: `CLIP_STATES` builds it for every archetype, but only `animalAnim` reads it (`2797`);
 units hold the last frame of `death` instead.
@@ -463,7 +470,11 @@ States/archetypes that exist **and** the engine actually requests:
 
 # Checklist 2 — PRESENT BUT NOT WIRED
 
-Exists in the folder/index but the engine never requests it, or never resolves to a clip:
+Exists in the folder/index but the engine never requests it, or never resolves to a clip. **B1 status:** `stop`,
+`dropoff` and `heal` are now in `CLIP_STATES` and played by `unitAnim` (`stopsOf`, `dropsOf`, `healsOf`): the stop
+clip as an arrival that pauses (> 0.3 m move, ≥ 0.25 s still, no job) settles, the load's dropoff clip where a
+villager's carry ends (not at work stands), the heal clip through the monk's heal spans from the combat index; all
+weighted by stillness so none slides while walking. The table is the audit-time state; what stays dead follows it.
 
 | item | scope | evidence |
 |---|---|---|
@@ -482,6 +493,11 @@ Exists in the folder/index but the engine never requests it, or never resolves t
 | all 164 structure sample blueprints | absent from `index.blueprints` | §2.3 |
 | `poi_viz_excavator` | only blueprint with no idle → bind pose forever | `viewer.js:2491`, `2538-2539` |
 
+Still dead after B1 (8 clips): `mount`/`dismount` (no mount or dismount event is recorded), the 3 `@herd` clips (the
+recorder logs no herding job, so `JOB_KEY` has nothing to map), `attack@swing` on base_heavy_spearman (both
+heavy-spearman blueprints wield `cdn_2h_spear`, so `styleOf` never picks `swing`; dropping them needs a rebake), and
+the horse's `dropoff` (no mounted villager carries loads in the recordings).
+
 # Checklist 3 — MISSING (create / export / map)
 
 **A. Units with no usable rig (needs a new bake or a mapping fix)**
@@ -497,8 +513,8 @@ Exists in the folder/index but the engine never requests it, or never resolves t
 
 **B. Missing states per archetype (highest impact first)**
 
-1. `base_elephant_archer`: walk, jog, run, sprint, attack — 2 elephant-archer blueprints currently idle while moving
-   and cannot attack.
+1. ~~`base_elephant_archer`: walk, jog, run, sprint, attack~~ — not missing: it is the tower crew rig (§1.4); the crews
+   now stand in their elephant's basket.
 2. `base_spearshield`: aim, fire, reload — 10 ranged blueprints (bedouin-skirmisher etc.) shoot with `attack`/`guard`.
 3. `base_monk`: guard, sprint. Attack, death and flinch already play through the `base_civilian` overlay that every
    monk mapping carries (`extra: ['base_civilian']`, 25/25 mappings).
@@ -518,8 +534,8 @@ Exists in the folder/index but the engine never requests it, or never resolves t
 
 **D. Dead clip budget to reclaim**
 
-- 58 clips (11.8%) already baked but unreachable: 40 `stop`, 8 `dropoff`, 2 `heal`, 2 `attack@swing` (heavy), 3
-  `@herd`, 2 `mount/dismount`, 1 `stop@arquebus`. Cheapest win: add `stop` to `CLIP_STATES` or delete the clips.
+- 58 clips (11.8%) were baked but unreachable: 40 `stop`, 8 `dropoff`, 2 `heal`, 2 `attack@swing` (heavy), 3
+  `@herd`, 2 `mount/dismount`, 1 `stop@arquebus`. B1 wired `stop`, `dropoff` and `heal`; 8 remain (Checklist 2).
 
 ---
 
