@@ -572,10 +572,10 @@ function analyze(name) {
     addAt(killer, kill.t, 'kills'); if (!victim || !killer) continue;
     addAt(killer, kill.t, 'killsWithVictim');
     let attackers = 0;
-    // At death, attacker must be alive, latest target flag must be this victim, and flag or last blow within 2 periods.
+    // At death, count living attackers on the killer's team that target the hostile victim, with a flag/blow within 2 periods.
     for (const [id, flags] of C.per) {
       const e = C.byId.get(id), index = lastPair(flags, kill.t);
-      if (!e || index < 0 || flags[index + 1] !== victim.id || !F.alive(e, kill.t - .001) || C.teamOf(e, kill.t) === C.teamOf(victim, kill.t)) continue;
+      if (!e || index < 0 || flags[index + 1] !== victim.id || !F.alive(e, kill.t - .001) || C.teamOf(e, kill.t) !== C.teamOf(killer, kill.t) || C.teamOf(e, kill.t) === C.teamOf(victim, kill.t)) continue;
       const period = F.statsAt(C, e, kill.t)?.period || 0;
       const blows = C.lists.get(id) || [];
       let recent = flags[index] >= kill.t - .5;

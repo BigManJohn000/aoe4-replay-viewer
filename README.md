@@ -243,9 +243,10 @@ its header comment carries the full method and the measurements behind each cons
 
 - Micro Rating v2 is the percentile weighted mean: 30 % Priority + 25 % Focus + 15 % Kiting + 15 % Splash +
   15 % Uptime. The parts are calibrated against 2000+ sides from 151 recorded games; 50 is the median side.
-  Priority measures target efficiency against the best target in reach. Focus = 60 % focus-kill-share percentile +
-  40 % waste-control (overkill) percentile. Kiting is the mean of moving-share and chase-gain percentiles when
-  measured. Splash measures siege shots hitting two or more units; uptime measures attack-cycle occupancy relative
+  Priority measures target efficiency against the best target in reach. Focus = 60 % focus-kill-share percentile
+  (kills with at least three recent attackers from the killer's own team) + 40 % waste-control (overkill) percentile.
+  Kiting is the mean of moving-share and chase-gain percentiles when measured for player-owned ranged army units,
+  excluding buildings and siege. Splash measures siege shots hitting two or more units; uptime measures attack-cycle occupancy relative
   to continuous attacking. Absent parts are omitted and available weights renormalised. Letters remain S ≥ 90,
   A ≥ 75, B ≥ 60, C ≥ 45, otherwise F. The visible card shows each side's score, grade and five percentile bars;
   unmeasured parts are grey.

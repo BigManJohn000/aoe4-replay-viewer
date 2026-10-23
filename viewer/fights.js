@@ -256,13 +256,14 @@
     for (const kill of C.kills) {
       const killer = C.byId.get(kill.killer), victim = C.byId.get(kill.victim);
       if (!killer || !victim) continue;
+      const killerTeam = C.teamOf(killer, kill.t), victimTeam = C.teamOf(victim, kill.t);
       let attackers = 0;
       for (const [id, flags] of C.per) {
         const e = C.byId.get(id);
         let lo = 0, hi = flags.length >> 1;
         while (lo < hi) { const m = (lo + hi) >> 1; if (flags[m * 2] <= kill.t) lo = m + 1; else hi = m; }
         const j = (lo - 1) * 2;
-        if (!e || j < 0 || flags[j + 1] !== victim.id || !Fr.alive(e, kill.t - 0.001) || C.teamOf(e, kill.t) === C.teamOf(victim, kill.t)) continue;
+        if (!e || j < 0 || flags[j + 1] !== victim.id || !Fr.alive(e, kill.t - 0.001) || C.teamOf(e, kill.t) !== killerTeam || C.teamOf(e, kill.t) === victimTeam) continue;
         const st = Fr.statsAt(C, e, kill.t), period = st && st.period || 0;
         let recent = flags[j] >= kill.t - SAMPLE;
         if (!recent) {
@@ -276,7 +277,7 @@
         if (recent) attackers++;
       }
       const p = pos(victim, kill.t - 0.001);
-      kills.push({ t: kill.t, x: p.x, z: p.z, team: C.teamOf(killer, kill.t), multi: attackers >= 3 });
+      kills.push({ t: kill.t, x: p.x, z: p.z, team: killerTeam, multi: attackers >= 3 });
     }
     const melee = C.ents.filter((e) => !["building", "attachment", "livestock", "other", "siege"].includes(e.cat) && (Fr.statOf(e.bp) || {}).wp?.some((w) => w.ty === "melee"));
     for (const mine of C.lists.values()) {
@@ -284,7 +285,7 @@
       for (const bl of mine) {
         if (!(bl.shot || (!bl.torch && (bl.dtype === "pierce" || bl.a.cat === "ranged" || bl.a.type === "horsearcher")))) continue;
         const e = bl.a, t = bl.t0, sa = Fr.statsAt(C, e, t), main = sa && weaponsOf(sa)[0];
-        if (e.cat === "siege" || e.cat === "villager" || e.cat === "econ" || !(e.cat === "ranged" || e.type === "horsearcher" || main && main.ty === "ranged")) continue;
+        if (isBld(e) || SKIP_CAT.has(e.cat) || !C.players.has(Fr.ownerAt(e, t)) || e.cat === "siege" || /mangonel|springald|ribauldequin|trebuchet|bombard|culverin|nest.of.bees|hui.hui/i.test(e.bp) || e.cat === "villager" || e.cat === "econ" || !(e.cat === "ranged" || e.type === "horsearcher" || main && main.ty === "ranged")) continue;
         const p = pos(e, t), team = C.teamOf(e, t), owner = Fr.ownerAt(e, t);
         let enemy = null, distance = Infinity;
         for (const m of melee) {
