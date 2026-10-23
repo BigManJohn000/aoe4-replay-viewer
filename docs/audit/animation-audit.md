@@ -474,7 +474,14 @@ Exists in the folder/index but the engine never requests it, or never resolves t
 `dropoff` and `heal` are now in `CLIP_STATES` and played by `unitAnim` (`stopsOf`, `dropsOf`, `healsOf`): the stop
 clip as an arrival that pauses (> 0.3 m move, ≥ 0.25 s still, no job) settles, the load's dropoff clip where a
 villager's carry ends (not at work stands), the heal clip through the monk's heal spans from the combat index; all
-weighted by stillness so none slides while walking. The table is the audit-time state; what stays dead follows it.
+weighted by stillness so none slides while walking. Measured over `aoe4_245598603` (the shipped `unitAnim` run in Node
+on the real Replay, clip tables from the index): the stop clip plays at 8,488 of 14,282 arrivals (most others are
+pre-empted by a blow, heal or drop-off, which take precedence), the heal clip in 220 of 324 heal spans (the rest: the
+monk moves while healing), the dropoff clip at only 232 of 10,664 drop-offs: 5,831 villagers walk on without stopping
+and 4,574 are back at a work stand within 0.3 s, both of which skip it by design. No moving frame (268,757 sampled)
+carried any of the three, and forward playback and backward seeks gave identical poses.
+`viewer3d/tools/audit-regressions.test.mjs` covers the selection, gating and seek rules. The table is the audit-time
+state; what stays dead follows it.
 
 | item | scope | evidence |
 |---|---|---|
