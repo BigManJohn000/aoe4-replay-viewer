@@ -189,6 +189,7 @@
       this.camX = 0;
       this.camZ = 0;
       this.hits = [];
+      this.siegeOnScreen = []; // reused by 2D firing cues; filled only after drawUnit's screen cull
       this.gaiaBy = new Map();
       for (const o of M.gaia) {
         if (!this.gaiaBy.has(o.kind)) this.gaiaBy.set(o.kind, []);
@@ -357,6 +358,7 @@
       }
       g.clearRect(0, 0, this.w, this.h);
       this.drawGround();
+      this.siegeOnScreen.length = 0;
       this.hits = [];
       if (S.showResources) this.drawGaia();
       const mask = S.viewMask;
@@ -690,6 +692,7 @@
       const g = this.g, x = this.sx(e.px, e.pz), y = this.sy(e.px, e.pz), r = this.unitRadius(e), col = this.color(e);
       const m = r * 1.5 + 12; // figures reach about 1.3 r sideways; pips and bars a little more
       if (x < -m || y < -m || x > this.w + m || y > this.h + m) return;
+      if (this.S.showShots && (e.cat === "siege" || e.type === "siege" || e.type === "ram")) this.siegeOnScreen.push(e);
       stampUnit(g, x, y, r, e.type, e.cat, col);
       if (r >= PIP_R && e.ptier && RV.isMilitary(e.cat)) tierPips(g, x, y - unitReach(e.type, r) - 2, r, e.ptier);
       const frac = e.maxhp > 0 ? e.php / e.maxhp : 1;

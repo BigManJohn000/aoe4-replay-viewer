@@ -73,6 +73,13 @@
     return `rgba(${v >> 16},${(v >> 8) & 255},${v & 255},${Math.max(0, Math.min(1, a))})`;
   }
 
+  // 2D only: harvest/analysis/SUMMARY.md, 22 recordings, matched-control excess enemy HP loss/unit:
+  // 0–1/1–2 m: 14.9/21.7; 2–3/3–4 m: 9.4/7.4 (~40%); 4–5/5–6 m: 3.0/1.2 (~10–15%, edge).
+  // Unlike the shared 3D display convention, these measured mangonel bands end at 2, 4 and 5.5 world metres.
+  const MANGONEL_BANDS_2D = [[2, 1], [4, 0.4], [5.5, 0.125]];
+  const SOLID_2D = [], DASHED_2D = [5, 4];
+  const MANGONEL_2D = /mangonel/;
+
   /**
    * Paints this frame's combat effects on the 2D map (RV.MapView `map`) from M.view after map.draw ran V.frame(t):
    * projectiles (siege on an arc, with a muzzle flash), splash rings, heals and floating damage numbers. Shown when
@@ -117,7 +124,7 @@
       if (p.damageType === "siege") {
         g.fillStyle = col; g.beginPath(); g.arc(px, py, Math.max(2, Math.min(5, 0.6 * k)), 0, tau); g.fill();
         g.strokeStyle = alpha(col, 0.4); g.lineWidth = 1; g.beginPath(); g.moveTo(tx, ty); g.lineTo(px, py); g.stroke();
-        const mz = X.muzzleAnim(p.t0, t);
+        const mz = a && (a.cat === "siege" || a.type === "siege" || a.type === "ram") ? null : X.muzzleAnim(p.t0, t);
         if (mz) {
           g.globalAlpha = mz.alpha;
           g.strokeStyle = "#fde047"; g.lineWidth = 2;
@@ -130,19 +137,73 @@
       }
       g.globalAlpha = 1;
     }
-    // splash rings at landed siege shots: red 100%, orange 50%, dashed yellow 25%
+    // Firing cadence is a projectile cue, not an under-attack alert. Only visit siege icons already culled by the map.
+    if (!opts || opts.showShots !== false) for (const e of map.siegeOnScreen) {
+      const blows = M.combat.lists.get(e.id);
+      if (!blows || !blows.length) continue;
+      const stats = RV_FRAME.statsAt(M.combat, e, t);
+      let period = stats && stats.period;
+      if (!(period > 0)) {
+        const st = RV_FRAME.statOf(e.bp), weapons = st && st.wp;
+        if (weapons) for (let i = 0; i < weapons.length; i++) {
+          if (weapons[i].ty !== "fire") { period = weapons[i].per; break; }
+        }
+      }
+      if (!(period > 0)) continue;
+      let lo = 0, hi = blows.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >>> 1;
+        if (blows[mid].t0 <= t) lo = mid + 1; else hi = mid;
+      }
+      let shot = null;
+      // Rams have contact strikes, not projectiles: their recorded blow is the firing cue.
+      for (let i = lo - 1; i >= 0 && t - blows[i].t0 <= 2 * period; i--) {
+        if (blows[i].shot || e.type === "ram") { shot = blows[i]; break; }
+      }
+      if (!shot) continue;
+      const age = t - shot.t0, progress = Math.min(1, age / period);
+      const x = map.sx(e.px, e.pz), y = map.sy(e.px, e.pz), r = map.unitRadius(e) * 1.35 + 3;
+      g.setLineDash(SOLID_2D);
+      g.globalAlpha = 0.7; g.strokeStyle = "#0b0e14"; g.lineWidth = 2.5;
+      g.beginPath(); g.arc(x, y, r, -Math.PI / 2, tau - Math.PI / 2); g.stroke();
+      g.globalAlpha = 0.95; g.strokeStyle = "#fde68a"; g.lineWidth = 1.25;
+      g.beginPath(); g.arc(x, y, r, -Math.PI / 2, progress * tau - Math.PI / 2); g.stroke();
+      const mz = X.muzzleAnim(shot.t0, t);
+      if (mz) {
+        g.globalAlpha = mz.alpha; g.strokeStyle = "#fde047"; g.lineWidth = 2;
+        g.beginPath(); g.arc(x, y, 4 + mz.k * Math.max(8, 1.5 * k), 0, tau); g.stroke();
+        g.globalAlpha = 0.8 * mz.alpha; g.fillStyle = "#fff7d6";
+        g.beginPath(); g.arc(x, y, 3 + 2 * (1 - mz.k), 0, tau); g.fill();
+      }
+      g.globalAlpha = 1;
+    }
+    // Measured mangonel falloff is 2D-only; other splash shooters retain their shared display bands.
     if (!opts || opts.showSplash !== false) for (const im of V.activeImpacts) {
       const an = X.impactAnim(im.t1, t);
       if (!an) continue;
       const x = map.sx(im.x, im.z), y = map.sy(im.x, im.z);
-      for (let i = 0; i < im.splashRadii.length; i++) {
-        const [r] = im.splashRadii[i];
-        g.setLineDash(i === 2 ? [5, 4] : []);
-        g.strokeStyle = alpha(X.SPLASH_COLOR[i] || X.SPLASH_COLOR[2], an.alpha * (i ? 0.85 : 1));
+      const shooter = M.byId.get(im.attackerId), measured = shooter && MANGONEL_2D.test(shooter.bp);
+      const bands = measured ? MANGONEL_BANDS_2D : im.splashRadii;
+      let inner = 0;
+      for (let i = 0; i < bands.length; i++) {
+        const r = bands[i][0] * k * an.k;
+        g.setLineDash(i === 2 ? DASHED_2D : SOLID_2D);
+        g.strokeStyle = X.SPLASH_COLOR[i] || X.SPLASH_COLOR[2];
+        g.globalAlpha = an.alpha * (i ? 0.85 : 1);
         g.lineWidth = i ? 1.5 : 2.5;
-        g.beginPath(); g.arc(x, y, Math.max(3, r * k * an.k), 0, tau); g.stroke();
+        if (measured) {
+          g.fillStyle = g.strokeStyle;
+          g.globalAlpha = an.alpha * (i === 0 ? 0.22 : i === 1 ? 0.12 : 0.06);
+          g.beginPath(); g.arc(x, y, r, 0, tau);
+          if (inner > 0) { g.moveTo(x + inner, y); g.arc(x, y, inner, 0, tau, true); }
+          g.fill();
+          g.globalAlpha = an.alpha * (i ? 0.85 : 1);
+        }
+        g.beginPath(); g.arc(x, y, measured ? r : Math.max(3, r), 0, tau); g.stroke();
+        inner = r;
       }
-      g.setLineDash([]);
+      g.globalAlpha = 1;
+      g.setLineDash(SOLID_2D);
     }
     // floating damage numbers
     if (!opts || opts.showDmg !== false) {

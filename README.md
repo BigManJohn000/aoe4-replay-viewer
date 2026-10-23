@@ -108,8 +108,11 @@ python\python.exe tools\trends.py                             # rebuild viewer/d
 | Victory conditions | | top bar: the sacred sites in their holder's colour, a 10:00 **Sacred victory** countdown while one team holds every site (it ends when a site is lost), **Wonder constructing (player)** while an Age IV wonder is built, then a 15:00 **Wonder victory** countdown and the wonder's HP |
 | Under-attack notices | | a notice on the left edge when an enemy hits a player where they had no alert within 50 m for 15 s ("⚔️ Beasty attacking Mali Lee's Villagers"); click to jump there, the map ring pulses at the spot, it fades after 5 s; **Under-attack notifications** in Layers & settings mutes them |
 | Selection tray | several selected: one icon per blueprint with a count and health; click drops one, right-click (or Alt+click) drops that blueprint | the same tray |
-| Combat FX | Separate **Damage**, **Heals** and **Projectiles** boxes default on: floating damage numbers (red melee, orange pierce, gold siege, purple bonus damage; rising and fading over 0.6 s), green heal `+` particles, emerald rings and monk tethers, and projectiles including lobbed siege stones with muzzle flashes. **Splash rings** defaults off: enables siege impact falloff rings (red 100 %, orange 50 %, dashed yellow 25 %) | **Combat FX** in Overlays: the same numbers as sprites (also under **Damage numbers & flash**), siege arcs with a muzzle ring, the three splash rings on the terrain, and heals as rising `+` particles, a glowing base ring and a tether beam |
+| Combat FX | Separate **Damage**, **Heals** and **Projectiles** boxes default on: floating damage numbers (red melee, orange pierce, gold siege, purple bonus damage; rising and fading over 0.6 s), green heal `+` particles, emerald rings and monk tethers, and projectiles including lobbed siege stones with muzzle flashes. **Splash rings** defaults off; measured 2D mangonel bands and siege reload cues are described below | **Combat FX** in Overlays: the same numbers as sprites (also under **Damage numbers & flash**), siege arcs with a muzzle ring, the three splash rings on the terrain, and heals as rising `+` particles, a glowing base ring and a tether beam |
 | Eco opportunity cost | **Eco** tab: for Wheelbarrow, Double Broadax, Horticulture, Specialized Pick and Shaft Mining, one row per upgrade per player: Upgrade, Timing (researched vs the opponent's time or the typical time), Missed gather value, and a Verdict (On time, Delayed (no attack), Used tempo to attack); click a row to seek; **How is this calculated? (?)** explains the method | **Upgrade opportunity cost** atop the Economy tab: the same table |
+
+- **Splash rings** (2D, default off): mangonel landings grow/fade through a red ≤2 m full-effect disc, orange 2–4 m ≈40 % band and dashed yellow 4–5.5 m ≈10–15 % edge; matched-control measurements from 22 recordings (`harvest/analysis/SUMMARY.md`). Other splash shooters keep their existing display bands.
+- **Projectiles** (2D, default on): visible siege engines show a thin reload arc filling over their upgraded weapon period since the last recorded shot (contact strike for rams), held full until two periods after firing, plus a brief shot flash; independent of Splash rings and Alerts.
 
 Links can name a match and a time: `index.html#aoe4_245598603/t1280` opens 21:20.
 In 2D, resizing the map or toggling the caster dock preserves camera framing, including moment-link focus.
@@ -206,8 +209,8 @@ same events at the same moment:
 - `RV_FRAME.controller(index)` is each viewer's `FrameRenderState`: `selectedUnitIds`, `hoveredUnitId`, and for a
   time *t* the `activeProjectiles`, `activeImpacts` (splash shots landed in the last 0.5 s), `activeHeals`,
   `floatingDamageEvents` and `activeEngagementLines` lists. The lists come from the recorded tracks alone, never from
-  a viewer's drawing positions. The combat FX in both viewers are drawn from these lists and `RV_FX` only, so they
-  match frame for frame.
+  a viewer's drawing positions. Both viewers use these lists and `RV_FX` for event timing; 2D additionally draws
+  measured mangonel falloff bands and per-engine reload cues from the combat index and weapon stats.
 - `RV_FRAME.statsAt(index, unit, t)` and `RV_FRAME.telemetry(index, unit, t)` give a unit's stats with its upgrades,
   and its damage dealt and taken, kills, DPS uptime and target-priority grade, up to *t*. `RV_FRAME.cardData` puts
   both in the rows the stat card (`viewer/card.js`) shows, base next to upgraded.
@@ -269,8 +272,9 @@ idle and late counts, tags, target-fire shares, eco casualties) over both viewer
 - Fog of war uses plain sight circles: no hill bonus, no sight upgrades; stealth forests don't hide units.
 - The recording has no damage, projectile or heal events. Damage is the HP lost between two samples (one number can
   sum several hits), typed by the weapon of the unit attacking it. Heals are HP gains within 8 m of an allied monk.
-  Splash shows the measured 5 m full-damage reach; the 50 % and 25 % rings around it are a drawing convention,
-  because no falloff can be measured.
+  The 2D mangonel bands summarize matched-control falloff over 22 recordings (full effect ≤2 m, ≈40 % at 2–4 m,
+  ≈10–15 % near the 4–5.5 m edge), not exact damage predictions. Other splash shooters and 3D retain the shared
+  5/6.25/7.5 m display convention; splash-hit attribution remains within 5 m.
 - In 3D, ships and siege engines are static models (no rig support yet).
 - Watch in game fast-forwards at the game's own playback speed, so reaching the late game of a long match takes a
   few minutes.
