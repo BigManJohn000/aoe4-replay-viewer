@@ -231,6 +231,81 @@
           el("i", { style: { width: `${share}%` } }),
           el("i", { class: "rvc-stat-up", style: { width: `${max ? 100 - share : 0}%` } }))));
   }
+  const benchmarkTimes = new WeakMap();
+  function benchmarkSeconds(combat, e, t) {
+    let units = benchmarkTimes.get(combat);
+    if (!units) benchmarkTimes.set(combat, units = new Map());
+    let times = units.get(e.id);
+    if (!times) {
+      const engaged = [], active = [], flags = combat.per.get(e.id) || [];
+      for (let i = 0; i < flags.length; i += 2) engaged.push([flags[i] - 0.5, flags[i]]);
+      for (const blow of combat.lists.get(e.id) || []) {
+        const stats = RV_FRAME.statsAt(combat, e, blow.t0), period = (stats && stats.period) || blow.period || 0;
+        engaged.push([blow.t0, blow.t0 + 2 * period]);
+        if (period > 0) active.push([blow.t0, blow.t0 + period]);
+      }
+      const union = intervals => {
+        intervals.sort((a, b) => a[0] - b[0]);
+        const result = [];
+        for (const interval of intervals) {
+          const last = result[result.length - 1];
+          if (interval[1] <= interval[0]) continue;
+          if (last && interval[0] <= last[1]) last[1] = Math.max(last[1], interval[1]);
+          else result.push(interval);
+        }
+        return result;
+      };
+      times = { engaged: union(engaged), active: union(active) };
+      units.set(e.id, times);
+    }
+    const aliveSeconds = intervals => {
+      let seconds = 0;
+      for (const [start, end] of intervals) {
+        if (start >= t) break;
+        for (let i = 0; i < e.spans.length; i += 2) {
+          if (e.spans[i] >= Math.min(t, end)) break;
+          seconds += Math.max(0, Math.min(end, t, e.spans[i + 1]) - Math.max(start, 0, e.spans[i]));
+        }
+      }
+      return seconds;
+    };
+    return { engaged: aliveSeconds(times.engaged), active: aliveSeconds(times.active) };
+  }
+
+  function benchmarkOf(combat, e, t, name, stats, tel) {
+    const data = window.RV_BENCH;
+    const key = name.replace(/^(?:(?:Early|Veteran|Elite|Imperial|Hardened)\s+)+/i, "")
+      .replace(/\s+(?:I|II|III|IV|V)$/, "").trim().toLowerCase();
+    const bench = data && data.units && data.units[key], memo = combat.telemetry.get(e.id);
+    if (!bench || !stats || !memo) return null;
+    const seconds = benchmarkSeconds(combat, e, t);
+    if (seconds.engaged < 10) return null;
+    const dps = tel.dealt / seconds.engaged, uptime = seconds.active / seconds.engaged;
+    let samples = 0, good = 0;
+    for (let i = 0; i < memo.atkT.length && memo.atkT[i] <= t; i++) {
+      samples++;
+      if (memo.eff[i] >= RV_FRAME.PRIO_GOOD) good++;
+    }
+    const goodShare = samples ? good / samples : null;
+    const source = `median of ${bench.n} units in ${data.source.recordings} recorded 2000+ games`;
+    const pct = v => `${Math.round(v * 100)}%`;
+    const compare = (label, value, median, format, explanation, grade) => {
+      const known = Number.isFinite(value) && Number.isFinite(median);
+      const direction = known && Math.abs(value - median) > 1e-6 ? (value > median ? "up" : "down") : "";
+      return el("div", { title: `${source}\n${explanation}` },
+        el("span", { class: "rvc-bench-label" }, label),
+        el("b", {}, grade ? `${grade} · ` : "", value == null ? "–" : format(value),
+          el("span", { class: "rvc-bench-median" }, ` / ${median == null ? "–" : format(median)}`),
+          direction ? el("span", { class: `rvc-bench-${direction}`, "aria-label": `${direction === "up" ? "above" : "below"} benchmark` }, direction === "up" ? " ▲" : " ▼") : null));
+    };
+    return el("div", { class: "rvc-benchmark", "data-unit-type": key },
+      el("div", { class: "rvc-h", title: source }, "vs 2000+"),
+      el("div", { class: "rvc-bench-values" },
+        compare("Effective DPS", dps, bench.effDps, fmt, "Credited damage / engaged seconds; engaged = alive time in unioned [attack flag − 0.5 s, flag] and [blow, blow + 2 upgraded attack periods]."),
+        compare("Uptime", uptime, bench.uptime, pct, "Unioned [blow, blow + upgraded attack period] alive seconds / engaged seconds, matching the benchmark's inferred attack-cycle occupancy."),
+        compare("Target grade", goodShare, bench.priorityGood, pct, "Live letter grade and share of graded attack samples rated good / benchmark good-sample share.", tel.grade)));
+  }
+
   C.explorer = function (combat, e, t, cd, player, fallback, death) {
     style();
     const s = RV_FRAME.statsAt(combat, e, t), st = s && s.st;
@@ -296,8 +371,10 @@
       el("div", { class: "rvc-tel rvc-live" },
         metric("damage dealt", fmt(tel.dealt)), metric("damage taken", fmt(tel.taken)),
         metric("kills", String(tel.kills)), metric("healing received", fmt(healedAt(combat, e, t))),
-        metric("DPS uptime", tel.uptime == null ? "–" : `${Math.round(tel.uptime * 100)}%`),
+        metric("fight-zone uptime", tel.uptime == null ? "–" : `${Math.round(tel.uptime * 100)}%`),
         metric("target grade", C.grade(tel.grade))));
+    const benchmark = benchmarkOf(combat, e, t, name, s, tel);
+    if (benchmark) box.append(benchmark);
     if (death) box.append(el("div", { class: "rvc-death" }, death));
     return box;
   };

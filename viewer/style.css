@@ -110,6 +110,14 @@ main { display: grid; grid-template-columns: minmax(0, 1fr) 410px; grid-template
 .rvc-explorer .rvc-live { grid-template-columns: repeat(3, 1fr); }
 .rvc-explorer .rvc-live>div { font-size: 10px; background: #1b2531; }
 .rvc-explorer .rvc-live b { font-size: 14px; margin-bottom: 2px; }
+.rvc-benchmark { margin-top: 8px; padding-top: 1px; border-top: 1px solid #354151; }
+.rvc-bench-values { display: grid; grid-template-columns: 1fr 1fr 1.15fr; gap: 5px; font-variant-numeric: tabular-nums; }
+.rvc-bench-values>div { min-width: 0; padding: 5px 4px; background: #1b2531; border-radius: 3px; }
+.rvc-bench-label { display: block; font-size: 9px; color: #aebac9; margin-bottom: 3px; }
+.rvc-bench-values b { font-size: 10px; white-space: nowrap; }
+.rvc-bench-median { font-weight: 400; color: #aebac9; }
+.rvc-bench-up { color: #8dd49b; }
+.rvc-bench-down { color: #f2a196; }
 .team { margin-top: 8px; }
 .team .tname { font-weight: 600; margin-bottom: 3px; }
 .verdict { margin-top: 8px; color: #fbbf24; }
