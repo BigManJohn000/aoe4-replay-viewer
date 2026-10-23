@@ -19,11 +19,12 @@
 
   const S = {
     t: 0, playing: false, speedIdx: 2, viewMask: 0,
-    showAttacks: true, showHeat: false, showFx: true, showTrails: true, showOrders: true, showEcoOrders: false, showLabels: false,
-    showTerrain: true, showResources: true, showComp: true, showCams: false,
+    showAttacks: false, showHeat: false, showAlerts: false, showDmg: true, showHeals: true, showShots: true, showSplash: false, showRange: false,
+    showTrails: true, showOrders: true, showEcoOrders: false, showLabels: false,
+    showTerrain: true, showResources: true, showComp: true, showCams: false, showCaster: true, showEcoDebt: true,
     selected: null, group: null, hover: null, follow: false, fight: null, dirty: true, mouse: null,
   };
-  let M, map, tl;
+  let M, map, tl, caster;
 
   const DEFAULT_REPLAY = "aoe4_245598603"; // opened when the link names no recording (the showcase match)
 
@@ -74,12 +75,19 @@
     S.viewMask = M.allMask;
     S.t = d.recordStart;
     buildHeader();
+    caster = RV_CASTER.create($("#casterHud"), M);
     map = new RV.MapView($("#map"), M, S);
+    // Alt is a selection modifier, not the browser's menu/link action.
+    for (const event of ["mousedown", "mouseup", "click"]) $("#map").addEventListener(event, ev => {
+      if (ev.altKey) ev.preventDefault();
+    }, { capture: true });
     tl = new RV.Timeline($("#timeline"), M, S);
     buildFightList();
     bindControls();
     showNotice(d.recorderErrors && d.recorderErrors.length ? `Recorder reported ${d.recorderErrors.length} errors` : "");
     window.addEventListener("resize", () => { map.resize(); tl.resize(); S.dirty = true; });
+    // Dock/layout changes resize the canvas without discarding its current focus, zoom or caption offset.
+    new ResizeObserver(() => { map.resize(); S.dirty = true; }).observe($("#mapWrap"));
     if (notes && notes.moments && notes.moments.length) {
       buildMoments(notes);
       if (+moment) showMoment(moment - 1);
@@ -153,7 +161,7 @@
       const r = SM && SM.players && SM.players[String(p.idx)];
       box.append(h("span", { class: "chip" }, h("i", { style: { background: p.color } }), p.name,
         h("span", { class: "team" }, `${p.civ} · T${p.team + 1}`),
-        r && r.result ? h("span", { class: "res " + r.result }, r.result) : null));
+        r && r.result ? h("span", { class: "res " + r.result, hidden: true }, r.result) : null));
     }
     if (SM) {
       const info = [SM.map && SM.map.name, SM.map && SM.map.biome, SM.map && SM.map.size, SM.mode, SM.winReason,
@@ -168,9 +176,11 @@
     }
     for (const p of M.players) view.append(h("option", { value: 1 << (p.idx - 1) }, `${p.name} only`));
     view.addEventListener("change", () => { S.viewMask = +view.value; S.dirty = true; });
-    for (const [id, key] of [["optAttacks", "showAttacks"], ["optHeat", "showHeat"], ["optFx", "showFx"], ["optTrails", "showTrails"], ["optOrders", "showOrders"],
+    for (const [id, key] of [["optAttacks", "showAttacks"], ["optHeat", "showHeat"], ["optAlerts", "showAlerts"],
+      ["optDmg", "showDmg"], ["optHeals", "showHeals"], ["optShots", "showShots"], ["optSplash", "showSplash"], ["optRange", "showRange"],
+      ["optTrails", "showTrails"], ["optOrders", "showOrders"],
       ["optEcoOrders", "showEcoOrders"], ["optLabels", "showLabels"], ["optTerrain", "showTerrain"],
-      ["optResources", "showResources"], ["optComp", "showComp"], ["optCams", "showCams"]]) {
+      ["optResources", "showResources"], ["optComp", "showComp"], ["optCams", "showCams"], ["optCaster", "showCaster"], ["optEcoDebt", "showEcoDebt"]]) {
       const cb = $("#" + id);
       cb.checked = S[key];
       cb.addEventListener("change", () => { S[key] = cb.checked; S.dirty = true; });
@@ -210,7 +220,45 @@
     $("#legend").hidden = !on;
     $("#legendShow").hidden = on;
     $("#optLegend").checked = on;
+    updateOptionMenus();
     localStorage.setItem("rv.key", on ? "1" : "0");
+  }
+
+  function updateOptionMenus() {
+    for (const button of document.querySelectorAll(".option-toggle")) {
+      const menu = $("#" + button.getAttribute("aria-controls"));
+      const boxes = menu.querySelectorAll("input");
+      button.textContent = `${button.dataset.options} ${menu.querySelectorAll("input:checked").length}/${boxes.length} ▾`;
+    }
+  }
+
+  function bindOptionMenus() {
+    const buttons = document.querySelectorAll(".option-toggle");
+    const close = () => {
+      let open = false;
+      for (const button of buttons) {
+        const menu = $("#" + button.getAttribute("aria-controls"));
+        if (!menu.hidden) open = true;
+        menu.hidden = true;
+        button.setAttribute("aria-expanded", "false");
+      }
+      return open;
+    };
+    for (const button of buttons) button.addEventListener("click", () => {
+      const menu = $("#" + button.getAttribute("aria-controls")), open = menu.hidden;
+      close();
+      menu.hidden = !open;
+      button.setAttribute("aria-expanded", String(open));
+    });
+    $("#top").addEventListener("change", updateOptionMenus);
+    document.addEventListener("click", ev => { if (!ev.target.closest(".option-menu")) close(); });
+    document.addEventListener("keydown", ev => {
+      if (ev.key === "Escape" && close()) {
+        ev.preventDefault();
+        ev.stopPropagation();
+      }
+    });
+    updateOptionMenus();
   }
 
   // ---------- controls ----------
@@ -223,10 +271,11 @@
     $("#metric").onchange = ev => { tl.metric = ev.target.value; S.dirty = true; };
     $("#watchGame").onclick = () => watchInGame(false);
     $("#fightSort").onchange = buildFightList;
+    bindOptionMenus();
     bindCompass();
     for (const b of document.querySelectorAll(".tabs button")) b.onclick = () => switchTab(b.dataset.tab);
     window.addEventListener("keydown", ev => {
-      if (ev.target.tagName === "SELECT" || ev.target.tagName === "INPUT") return;
+      if (ev.key !== "Escape" && ev.target.closest("button, input, select, textarea, [contenteditable]")) return;
       const step = ev.shiftKey ? 30 : 5;
       switch (ev.key) {
         case " ": togglePlay(); break;
@@ -240,6 +289,7 @@
         case "p": case "P": stepMoment(-1); break;
         case "f": case "F": if (S.selected) { S.follow = !S.follow; S.dirty = true; renderUnit(true); } break;
         case "k": case "K": showKey($("#legend").hidden); break;
+        case "h": case "H": $("#optCaster").click(); break;
         case "Escape": S.select(null); S.fight = null; renderFightDetail(); highlightFightList(); closeCaption(); break;
         default: return;
       }
@@ -737,13 +787,8 @@
       : e.defeated ? `Lost when ${p ? p.name : "its owner"} was defeated at ${RV.fmtTime(e.died)}`
       : killer ? `Slain by ${kp ? `${kp.name}'s ` : ""}${RV.nameAt(killer, e.died)} at ${RV.fmtTime(e.died)}`
       : `Died at ${RV.fmtTime(e.died)}`;
-    box.append(h("div", { class: "card" },
-      h("h3", {}, iconOf(e, p ? p.color : "#9ca3af", 36), cd ? cd.name : RV.nameAt(e, tAt)),
-      h("div", {}, h("span", { class: "chip" }, h("i", { style: { background: p ? p.color : "#888" } }), p ? p.name : "?")),
-      RV_CARD.hpBar(e.php, Math.max(e.php, cd ? cd.rows.find(r => r.label === "Max HP").cur : e.maxhp), e.on),
-      RV_CARD.cost(cd && cd.cost, e.value),
-      RV_CARD.coreStats(cd),
-      RV_CARD.impact(cd && cd.tel, death),
+    box.append(h("div", { class: "card rvc-unit-card" },
+      RV_CARD.explorer(M.combat, e, tAt, cd, p, iconOf(e, p ? p.color : "#9ca3af", 56), death),
       h("div", { class: "actions" },
         h("button", { onclick: () => { S.follow = !S.follow; S.dirty = true; renderUnit(true); } }, S.follow ? "Stop following" : "Follow (F)"),
         h("button", { onclick: () => S.seek(e.born) }, "Go to creation"),
@@ -875,6 +920,7 @@
       if (S.t >= M.duration) S.playing = false;
       S.dirty = true;
     }
+    caster.update(S.t, S.showCaster, now, S.showEcoDebt);
     if (S.dirty) {
       S.dirty = false;
       RV.updateFrame(M, S.t);
@@ -890,6 +936,7 @@
     $("#speed").textContent = SPEEDS[S.speedIdx] + "x";
     if (now - lastPanel > 250) {
       lastPanel = now;
+      for (const result of document.querySelectorAll("#players .res")) result.hidden = S.t < M.duration - 1;
       if (!$("#tab-players").hidden) renderPlayers();
       if (!$("#tab-eco").hidden) renderEco(false);
       if (fightPanel && !$("#tab-fights").hidden) fightPanel.setTime(S.t);

@@ -78,12 +78,12 @@
    * projectiles (siege on an arc, with a muzzle flash), splash rings, heals and floating damage numbers. Shown when
    * either end is visible under the Vision mask.
    */
-  X.draw2d = function (map, t, mask) {
+  X.draw2d = function (map, t, mask, opts) {
     const g = map.g, M = map.M, V = M.view, k = map.scale;
     const vis = (e) => e && e.on && RV.visibleTo(e, t, mask);
     g.save();
     // heals: tether, pulsing ring and rising "+" around the target
-    for (const h of V.activeHeals) {
+    if (!opts || opts.showHeals !== false) for (const h of V.activeHeals) {
       const a = M.byId.get(h.healerId), b = M.byId.get(h.targetId);
       if (!a || !b || !a.on || !b.on || (!vis(a) && !vis(b))) continue;
       const ax = map.sx(a.px, a.pz), ay = map.sy(a.px, a.pz), bx = map.sx(b.px, b.pz), by = map.sy(b.px, b.pz);
@@ -103,7 +103,7 @@
       g.globalAlpha = 1;
     }
     // projectiles and muzzle flashes
-    for (const p of V.activeProjectiles) {
+    if (!opts || opts.showShots !== false) for (const p of V.activeProjectiles) {
       const a = M.byId.get(p.attackerId), b = M.byId.get(p.targetId);
       if (!vis(a) && !vis(b)) continue;
       const x0 = map.sx(p.origin.x, p.origin.z), y0 = map.sy(p.origin.x, p.origin.z);
@@ -131,7 +131,7 @@
       g.globalAlpha = 1;
     }
     // splash rings at landed siege shots: red 100%, orange 50%, dashed yellow 25%
-    for (const im of V.activeImpacts) {
+    if (!opts || opts.showSplash !== false) for (const im of V.activeImpacts) {
       const an = X.impactAnim(im.t1, t);
       if (!an) continue;
       const x = map.sx(im.x, im.z), y = map.sy(im.x, im.z);
@@ -145,15 +145,17 @@
       g.setLineDash([]);
     }
     // floating damage numbers
-    g.font = "bold 12px system-ui, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.lineJoin = "round";
-    for (const n of V.floatingDamageEvents) {
-      const e = M.byId.get(n.unitId);
-      if (e && !RV.visibleTo(e, n.timestamp, mask)) continue;
-      const an = X.dmgAnim(n, t), x = map.sx(n.worldPos.x, n.worldPos.z), y = map.sy(n.worldPos.x, n.worldPos.z) - 8 - an.rise * X.DMG_RISE_PX;
-      const s = X.dmgText(n);
-      g.globalAlpha = an.alpha;
-      g.strokeStyle = "rgba(11,14,20,0.85)"; g.lineWidth = 3; g.strokeText(s, x, y);
-      g.fillStyle = X.dmgColor(n); g.fillText(s, x, y);
+    if (!opts || opts.showDmg !== false) {
+      g.font = "bold 12px system-ui, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.lineJoin = "round";
+      for (const n of V.floatingDamageEvents) {
+        const e = M.byId.get(n.unitId);
+        if (e && !RV.visibleTo(e, n.timestamp, mask)) continue;
+        const an = X.dmgAnim(n, t), x = map.sx(n.worldPos.x, n.worldPos.z), y = map.sy(n.worldPos.x, n.worldPos.z) - 8 - an.rise * X.DMG_RISE_PX;
+        const s = X.dmgText(n);
+        g.globalAlpha = an.alpha;
+        g.strokeStyle = "rgba(11,14,20,0.85)"; g.lineWidth = 3; g.strokeText(s, x, y);
+        g.fillStyle = X.dmgColor(n); g.fillText(s, x, y);
+      }
     }
     g.globalAlpha = 1;
     g.restore();

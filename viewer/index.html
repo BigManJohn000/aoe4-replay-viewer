@@ -12,9 +12,22 @@
     <div id="players"></div>
     <div class="spacer"></div>
     <label>Vision <select id="view"></select></label>
-    <label><input type="checkbox" id="optAttacks" checked> Attacks</label>
-    <label title="Colour attack lines by target choice: green good (the best target in reach), yellow ok, red poor"><input type="checkbox" id="optHeat"> Target fire</label>
-    <label title="Projectiles, siege arcs and muzzle flashes, splash rings, heals and floating damage numbers"><input type="checkbox" id="optFx" checked> Combat FX</label>
+    <div class="option-menu">
+      <button type="button" class="option-toggle" data-options="Combat" aria-controls="combatOptions" aria-expanded="false">Combat ▾</button>
+      <div id="combatOptions" class="option-popover" hidden>
+    <label title="Lines from attackers to their targets"><input type="checkbox" id="optAttacks"> Attacks</label>
+    <label title="Colour attack lines by target choice (requires Attacks): green good (the best target in reach), yellow ok, red poor"><input type="checkbox" id="optHeat"> Target fire</label>
+    <label title="Under-attack alerts as the game shows them"><input type="checkbox" id="optAlerts"> Alerts</label>
+    <label title="Floating damage numbers"><input type="checkbox" id="optDmg" checked> Damage</label>
+    <label title="Green heal rings, particles and healer tethers"><input type="checkbox" id="optHeals" checked> Heals</label>
+    <label title="Projectiles, siege arcs and siege muzzle flashes"><input type="checkbox" id="optShots" checked> Projectiles</label>
+    <label title="Siege splash falloff rings where area shots land"><input type="checkbox" id="optSplash"> Splash rings</label>
+    <label title="Maximum weapon range of selected units, up to 40 rings"><input type="checkbox" id="optRange"> Range rings</label>
+      </div>
+    </div>
+    <div class="option-menu">
+      <button type="button" class="option-toggle" data-options="Layers" aria-controls="layerOptions" aria-expanded="false">Layers ▾</button>
+      <div id="layerOptions" class="option-popover" hidden>
     <label><input type="checkbox" id="optTrails" checked> Trails</label>
     <label><input type="checkbox" id="optOrders" checked> Orders</label>
     <label><input type="checkbox" id="optEcoOrders"> Eco orders</label>
@@ -23,10 +36,15 @@
     <label title="Forests, mines, berries, animals, relics, sacred sites"><input type="checkbox" id="optResources" checked> Resources</label>
     <label title="Panel counting each player's units inside the current view"><input type="checkbox" id="optComp" checked> Army comp</label>
     <label title="The ground each player's screen showed, from the replay's camera records (16:9 screen assumed)"><input type="checkbox" id="optCams"> Cameras</label>
+    <label title="Docked 1v1 Caster Mode strip: economy, research and army value (H)"><input type="checkbox" id="optCaster" checked> Caster HUD</label>
+    <label title="Live missed-resource estimates for late economy upgrades: caster chips and timeline delay windows; hover for costs/evidence, click a timeline window to seek to its benchmark"><input type="checkbox" id="optEcoDebt" checked> Eco debt</label>
     <label title="The map key: what each icon, line and mark means (K)"><input type="checkbox" id="optLegend" checked> Key</label>
+      </div>
+    </div>
   </header>
 
   <main>
+      <div id="casterHud" role="region" aria-label="1v1 Caster HUD" hidden></div>
     <div id="mapWrap">
       <canvas id="map"></canvas>
       <div id="tooltip" hidden></div>
@@ -94,7 +112,7 @@
         <option value="military">Military units</option>
         <option value="villagers">Villagers</option>
       </select>
-      <span class="hint">Space play &middot; &larr;/&rarr; 5s (Shift 30s) &middot; [ ] prev/next fight &middot; N/P next/prev moment &middot; F follow &middot; K key &middot; Esc clear &middot; wheel zoom &middot; drag select (Shift adds) &middot; Shift/Alt+click drop one/type &middot; right-drag pan &middot; drag compass turn</span>
+      <span class="hint">Space play &middot; &larr;/&rarr; 5s (Shift 30s) &middot; [ ] prev/next fight &middot; N/P next/prev moment &middot; F follow &middot; H caster HUD &middot; K key &middot; Esc clear &middot; wheel zoom &middot; drag select (Shift adds) &middot; Shift/Alt+click drop one/type &middot; right-drag pan &middot; drag compass turn</span>
     </div>
     <canvas id="timeline"></canvas>
   </footer>
@@ -111,7 +129,9 @@
   <script src="card.js"></script>
   <script src="model.js"></script>
   <script src="map.js"></script>
+  <script src="ecodebt.js"></script>
   <script src="timeline.js"></script>
+  <script src="caster.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

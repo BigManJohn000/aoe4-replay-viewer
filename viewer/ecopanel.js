@@ -57,10 +57,11 @@
 
   const HOW = [
     "Each row is a villager upgrade (Wheelbarrow, Double Broadax, Horticulture, Specialized Pick, Shaft Mining). Timing is when it finished researching; the line under it is the time to beat.",
-    "The time to beat is when an opponent had the same upgrade (their research moved to this player's research time and age), or, if no opponent got it first, a typical competitive timing for this player's age-up.",
+    "The time to beat is an earlier opponent's research start, adjusted to this player's research time and age, or age arrival plus a measured median completion offset. The medians come from 504 ranked 1v1 games (1008 player-games), 2000+ MMR, patch 11308, analysed 2026-10-23 by tools/analyze_summaries.py; civ-specific medians require at least 30 researchers, otherwise the global median is used. Research time is not added to these completion offsets.",
     "Missed is the resources the player did not gather because the upgrade came late: from the time to beat until it finished (or until the game ended if never), the villagers on that resource times the gather speed the upgrade would have added. Gather speeds are estimated from each player's own bank and spending, since the recording has no gather rates. The figure shown grows with the replay clock; hover it for the final total.",
     "The verdict asks whether the delay bought something. \"Used tempo to attack\" needs both: the player's bank stayed low while their spending went mostly to army and defences, and within 90 to 180 seconds after the time to beat they hurt the enemy (enemy villagers idled, kills, damage to buildings, or a held defence). Otherwise the delay is \"Delayed (no attack)\": a pure economic loss.",
     "Hover a row for the research cost, the net result (missed minus upgrade cost; negative when skipping the cost saved more than it lost) and the reason for its verdict. Click a row to jump to the time to beat.",
+    "In the 2D viewer, Layers → Eco debt toggles live caster chips and timeline delay lanes. Chips show at most two active/recent delays per player and retain their final missed amount and used/unused decision for 20 seconds after research. Timeline windows run from benchmark to research (or replay end); hatching means unused, and clicking a window seeks to its benchmark. Hover chips or lanes for lateness, cost, net deficit and the recorded capitalized evidence.",
   ];
   // the how-it-works box keeps its open state across the viewers' once-a-second rebuilds
   let howOpen = false;

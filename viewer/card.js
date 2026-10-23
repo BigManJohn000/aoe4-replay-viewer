@@ -143,6 +143,165 @@
     return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
   }
 
+  // Explorer presentation is opt-in for the 2D page; the shared 3D card keeps its existing API and layout.
+  const explorerInfo = new Map(), explorerIcons = new Map(), healingByCombat = new WeakMap();
+  function infoOf(base, building) {
+    const key = `${building ? "buildings" : "units"}/${base}`;
+    if (!explorerInfo.has(key)) explorerInfo.set(key, (async () => {
+      for (const kind of building ? ["buildings", "units"] : ["units", "buildings"]) {
+        try {
+          // The unified endpoint contains the per-age, per-civilization variations.
+          const res = await fetch(`https://data.aoe4world.com/${kind}/unified/${encodeURIComponent(base)}.json`);
+          if (res.ok) return await res.json();
+        } catch (_) { return null; } // Offline: the local stats and map icon still work.
+      }
+      return null;
+    })());
+    return explorerInfo.get(key);
+  }
+  function portraitOf(st, building) {
+    const kind = building ? "buildings" : "units", key = `${kind}/${st.b}/${st.age}`;
+    if (!explorerIcons.has(key)) explorerIcons.set(key, new Promise(resolve => {
+      const ages = [st.age, 1, 2, 3, 4].filter((a, i, all) => a >= 1 && a <= 4 && all.indexOf(a) === i);
+      const img = new Image();
+      let i = 0;
+      img.onload = () => resolve(img.src);
+      img.onerror = () => {
+        if (i < ages.length) next();
+        else resolve(null); // Keep exhausted failures, as well as in-flight lookups, for this session.
+      };
+      const next = () => { img.src = `https://data.aoe4world.com/images/${kind}/${encodeURIComponent(st.b)}-${ages[i++]}.png`; };
+      if (ages.length) next();
+      else resolve(null);
+    }));
+    return explorerIcons.get(key);
+  }
+  function officialIcon(st, building, fallback) {
+    if (!st || !st.b) return fallback;
+    // Local map art is usable immediately, including while a shared lookup is still pending or has failed.
+    const placeholder = fallback || el("span", { class: "rvc-official-icon" });
+    portraitOf(st, building).then(src => {
+      if (src) placeholder.replaceWith(el("img", { class: "rvc-official-icon", src, alt: st.n || "", width: 56, height: 56 }));
+    });
+    return placeholder;
+  }
+  function healedAt(combat, e, t) {
+    let byTarget = healingByCombat.get(combat);
+    if (!byTarget) {
+      byTarget = new Map();
+      for (const heal of combat.heals || []) {
+        const id = typeof heal.target === "object" ? heal.target.id : heal.target;
+        let list = byTarget.get(id);
+        if (!list) byTarget.set(id, list = []);
+        list.push({ heal, times: null, totals: null });
+      }
+      healingByCombat.set(combat, byTarget);
+    }
+    let total = 0;
+    for (const entry of byTarget.get(e.id) || []) {
+      const heal = entry.heal;
+      if (heal.t0 > t) continue;
+      if (!entry.times) {
+        entry.times = []; entry.totals = [];
+        let amount = 0;
+        // Merged sessions retain no per-tick amounts; recover the recorded rises, not an average heal rate.
+        for (let i = Math.max(1, RV.idxAt(e.t, heal.t0)); i < e.t.length && e.t[i] <= heal.t1; i++) {
+          if (e.t[i] < heal.t0 || e.hp[i] <= e.hp[i - 1]) continue;
+          amount = Math.min(heal.total, amount + e.hp[i] - e.hp[i - 1]);
+          entry.times.push(e.t[i]); entry.totals.push(amount);
+        }
+      }
+      const i = RV.idxAt(entry.times, t);
+      if (i >= 0) total += entry.totals[i];
+    }
+    return total;
+  }
+  const classText = classes => (classes || []).map(g => g.map(c => c.replace(/_/g, " ")).join(" ")).join(" / ");
+  const titleCase = text => text.replace(/\b[a-z]/g, c => c.toUpperCase());
+  function statValue(base, cur, suffix = "") {
+    return el("span", { class: "rvc-stat-value" }, fmt(base),
+      Math.abs(cur - base) > 1e-6 ? el("span", { class: "rvc-upgrade" }, ` ↗ ${fmt(cur)}`) : null, suffix);
+  }
+  function statRow(icon, label, base, cur, title, bonus) {
+    const max = Math.max(base, cur, 0), share = max ? Math.min(base, cur) / max * 100 : 0;
+    return el("div", { class: `rvc-stat-row${bonus ? " rvc-bonus-row" : ""}`, title },
+      el("span", { class: "rvc-stat-icon", "aria-hidden": "true" }, icon),
+      el("div", {}, el("div", { class: "rvc-stat-line" }, statValue(base, cur), el("span", { class: "rvc-stat-label" }, label)),
+        el("div", { class: "rvc-stat-bar", "aria-hidden": "true" },
+          el("i", { style: { width: `${share}%` } }),
+          el("i", { class: "rvc-stat-up", style: { width: `${max ? 100 - share : 0}%` } }))));
+  }
+  C.explorer = function (combat, e, t, cd, player, fallback, death) {
+    style();
+    const s = RV_FRAME.statsAt(combat, e, t), st = s && s.st;
+    const name = cd ? cd.name : RV.nameAt(e, t), age = st && ["", "I", "II", "III", "IV"][st.age];
+    const classes = el("div", { class: "rvc-classes" }, st ? titleCase((st.cls || []).filter(c => ["heavy", "light", "melee", "ranged", "infantry", "cavalry", "siege", "building"].includes(c)).join(" ")) : "");
+    const desc = el("p", { class: "rvc-description", hidden: true });
+    const box = el("div", { class: "rvc-explorer" },
+      el("header", { class: "rvc-explorer-header" },
+        officialIcon(st, e.cat === "building", fallback),
+        el("div", {}, el("div", { class: "rvc-name-line" }, el("h3", {}, name),
+          age ? el("span", { class: "rvc-age", title: `Age ${age}` }, age) : null), classes)),
+      desc,
+      el("span", { class: "chip" }, el("i", { style: { background: player ? player.color : "#888" } }), player ? player.name : "?"),
+      C.hpBar(e.php, Math.max(e.php, s ? s.hp : e.maxhp), e.on),
+      C.cost(cd && cd.cost, e.value));
+    if (st) {
+      infoOf(st.b, e.cat === "building").then(data => {
+        if (!data) return;
+        const variations = data.variations || [data];
+        const civMatch = v => (v.civs || []).some(c => (st.civs || []).includes(c));
+        const v = variations.find(v => v.age === st.age && civMatch(v))
+          || variations.find(v => v.age === st.age) || variations.find(civMatch) || variations[0] || data;
+        if (v.displayClasses || data.displayClasses) classes.textContent = (v.displayClasses || data.displayClasses).join(" · ");
+        const text = v.description || data.description;
+        if (text) { desc.textContent = text; desc.hidden = false; }
+      });
+      const ups = cd.upgrades.map(u => `${u.name} (${clock(u.t)}): ${u.text}`).join("\n");
+      const rows = el("div", { class: "rvc-stat-rows" },
+        statRow("♥", "Hitpoints", st.hp || e.maxhp, s.hp, ups));
+      const weapons = st.wp || [], main = weapons.find(w => w.ty !== "fire") || weapons[0];
+      for (const w of weapons) {
+        const first = weapons.find(x => x.ty === w.ty);
+        const cur = w.dmg + (s.atk[w.ty] - first.dmg);
+        const label = `${w.ty} attack${weapons.length > 1 ? ` · ${w.n}` : ""}`;
+        rows.append(statRow(w.ty === "ranged" ? "➶" : w.ty === "fire" ? "♨" : "⚔", label, w.dmg, cur, `${w.n}: damage per hit${w.burst > 1 ? ` × ${w.burst}` : ""}\n${ups}`));
+        const bonuses = new Map();
+        for (const mod of w.mods || []) {
+          if (mod.e !== "change" || !mod.v) continue;
+          const vs = classText(mod.c) || (mod.id || []).join(" / ");
+          const old = bonuses.get(vs) || { base: 0, cur: 0 };
+          old.base += mod.v; old.cur += mod.v; bonuses.set(vs, old);
+        }
+        for (const mod of s.vs) {
+          if (mod.ty !== w.ty) continue;
+          const vs = classText(mod.c), old = bonuses.get(vs) || { base: 0, cur: 0 };
+          old.cur += mod.v; bonuses.set(vs, old);
+        }
+        for (const [vs, b] of bonuses) rows.append(statRow("+", `vs ${titleCase(vs)}`, b.base, b.cur, `Bonus damage: ${w.n}\n${ups}`, true));
+      }
+      rows.append(statRow("⬟", "Melee armor", (st.arm && st.arm.melee) || 0, s.arm.melee, ups),
+        statRow("◈", "Ranged armor", (st.arm && st.arm.ranged) || 0, s.arm.ranged, ups));
+      const summary = el("div", { class: "rvc-summary" });
+      const tile = (label, base, cur, suffix) => el("div", {}, el("span", { class: "rvc-summary-label" }, label), statValue(base, cur, suffix));
+      if (main) summary.append(tile("Damage (DPS)", main.per ? main.dmg * (main.burst || 1) / main.per : 0,
+        s.period ? s.atk[main.ty] * (main.burst || 1) / s.period : 0, ""));
+      summary.append(tile("Move speed", st.spd || 0, s.speed, " tiles/s"));
+      if (main) summary.append(tile("Attack speed", main.per, s.period, " s"), tile("Range", main.rmax, s.range, " tiles"));
+      box.append(rows, summary);
+    }
+    const tel = cd && cd.tel || RV_FRAME.telemetry(combat, e, t);
+    const metric = (label, value) => el("div", {}, el("b", {}, value), label);
+    box.append(el("div", { class: "rvc-h" }, "Live match impact"),
+      el("div", { class: "rvc-tel rvc-live" },
+        metric("damage dealt", fmt(tel.dealt)), metric("damage taken", fmt(tel.taken)),
+        metric("kills", String(tel.kills)), metric("healing received", fmt(healedAt(combat, e, t))),
+        metric("DPS uptime", tel.uptime == null ? "–" : `${Math.round(tel.uptime * 100)}%`),
+        metric("target grade", C.grade(tel.grade))));
+    if (death) box.append(el("div", { class: "rvc-death" }, death));
+    return box;
+  };
+
   /**
    * Selection tray: one button per group { key, label, n, hp, maxhp, icon (element or null) }. Click (or onOne) drops
    * one unit of the group, right-click or Alt+click drops the whole group (onAll).
@@ -154,7 +313,7 @@
       const f = g.maxhp ? Math.max(0, Math.min(1, g.hp / g.maxhp)) : 0;
       box.append(el("button", {
         type: "button", title: `${g.label} ×${g.n}\nClick: deselect one · Right-click / Alt+click: deselect all ${g.label}`,
-        onclick: (ev) => (ev.altKey ? onAll(g.key) : onOne(g.key)),
+        onclick: (ev) => { ev.preventDefault(); ev.altKey ? onAll(g.key) : onOne(g.key); },
         oncontextmenu: (ev) => { ev.preventDefault(); onAll(g.key); },
       }, g.icon || el("span", { class: "rvc-hint" }, g.label.slice(0, 3)), g.n > 1 ? el("b", {}, String(g.n)) : null,
       el("i", {}, el("i", { style: { width: `${f * 100}%`, background: hpColor(f) } }))));

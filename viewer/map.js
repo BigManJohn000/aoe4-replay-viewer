@@ -376,15 +376,16 @@
         if (e.cat === "building" && e.bkind !== "farm" && !BUILDING_TYPES[e.bkind].line) this.drawBuilding(e, false);
       }
       if (S.fight) this.drawFightRing(S.fight, t);
+      if (S.showRange) this.drawRanges(t, shown);
       if (S.showOrders) this.drawOrders(t, shown);
       if (S.showTrails) for (const e of visible) if (RV.isMilitary(e.cat)) this.drawTrail(e, t);
       if (S.showCams) this.drawCameras(t, mask);
       for (const e of visible) if (e.cat !== "building") this.drawUnit(e);
-      if (S.showAttacks) this.drawAlerts(t, mask);
+      if (S.showAlerts) this.drawAlerts(t, mask);
       if (S.showResources && M.sites.length) this.drawSites(t, mask);
       this.tallyOnScreen(visible);
       if (S.showAttacks) this.drawAttacks(t, mask);
-      if (S.showFx) RV_FX.draw2d(this, t, mask);
+      if (S.showDmg || S.showHeals || S.showShots || S.showSplash) RV_FX.draw2d(this, t, mask, S);
       this.drawDeaths(t, mask);
       this.drawConversions(t, mask);
       if (S.group) this.drawHighlight(S.group, shown);
@@ -395,6 +396,29 @@
         g.fillStyle = "rgba(253,224,71,0.08)"; g.fillRect(x, y, w, h);
         g.strokeStyle = HIGHLIGHT; g.lineWidth = 1; g.strokeRect(x + 0.5, y + 0.5, w, h);
       }
+    }
+
+    drawRanges(t, shown) {
+      const g = this.g, S = this.S, count = S.group ? S.group.length : S.selected ? 1 : 0;
+      if (!count) return;
+      g.save();
+      g.setLineDash([5, 4]); g.lineWidth = 1;
+      let drawn = 0;
+      for (let i = 0; i < count && drawn < 40; i++) {
+        const e = S.group ? S.group[i] : S.selected;
+        if (!e.on || !shown.has(e)) continue;
+        const st = RV_FRAME.statsAt(this.M.combat, e, t);
+        if (!st) continue;
+        let range = st.range;
+        for (const w of st.st.wp || []) range = Math.max(range, w.rmax || 0);
+        if (range < 1.5) continue;
+        const x = this.sx(e.px, e.pz), y = this.sy(e.px, e.pz), r = range * 4 * this.scale; // one tile is 4 world metres
+        if (x + r < 0 || y + r < 0 || x - r > this.w || y - r > this.h) continue;
+        g.strokeStyle = rgba(this.color(e), 0.3);
+        g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.stroke();
+        drawn++;
+      }
+      g.restore();
     }
 
     // Rings around highlighted units (close to the icon, so a crowd stays readable) and buildings, in one path: a
