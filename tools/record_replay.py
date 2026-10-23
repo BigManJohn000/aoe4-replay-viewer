@@ -80,6 +80,13 @@ def find_game_dir() -> Path | None:
 RECORDER = ROOT / "recorder" / "recorder.lua"
 CHUNK = 350
 SIM_TICKS_PER_SECOND = 8
+SAMPLE_INTERVAL = 0.5  # the recorder's sampling period, RR_INTERVAL in recorder/recorder.lua
+
+
+def reached_end(last_t: float, duration: float) -> bool:
+    """Whether a recording's last T record is the replay's final sample: one lands in every SAMPLE_INTERVAL, so an
+    earlier last T means samples (and the commands between them) are missing."""
+    return last_t >= duration - SAMPLE_INTERVAL
 
 
 def documents_dir() -> Path:
@@ -346,7 +353,7 @@ def is_complete(rlog: Path, duration: float) -> bool:
         f.seek(max(0, f.tell() - 262144))
         tail = f.read().decode("utf-8", errors="replace")
     times = re.findall(r"(?m)^T\|([\d.]+)", tail)
-    return bool(times) and float(times[-1]) >= duration - 1
+    return bool(times) and reached_end(float(times[-1]), duration)
 
 
 def record(src: Path, rec: recfile.Replay, speed: float, keep_open: bool) -> tuple[Path, bool]:
@@ -401,7 +408,7 @@ def record(src: Path, rec: recfile.Replay, speed: float, keep_open: bool) -> tup
                         rate_t0, rate_w0 = last_t, last_w
                 elif "R|ERR|" in line:
                     print("\n  recorder error:", line.split("R|ERR|", 1)[1][:200])
-            if last_t >= duration - 1:
+            if reached_end(last_t, duration):
                 break
             if time.time() - last_progress > 90:
                 print("\n  playback stopped advancing; finishing early")
@@ -423,7 +430,7 @@ def record(src: Path, rec: recfile.Replay, speed: float, keep_open: bool) -> tup
     finally:
         if not keep_open:
             close_game()
-    return out, last_t >= duration - 1
+    return out, reached_end(last_t, duration)
 
 
 def record_many(paths: list[Path], speed: float, game_dir: Path) -> None:
@@ -537,9 +544,11 @@ def record_main() -> None:
     if build is not None and build != rec.version:
         raise SystemExit(f"replay was recorded on build {rec.version}, installed game is build {build}; it will not play")
     try:
-        rlog, _ = record(src, rec, args.speed, args.keep_open)
+        rlog, complete = record(src, rec, args.speed, args.keep_open)
     except RecordError as e:
         raise SystemExit(str(e)) from None
+    if not complete:
+        raise SystemExit(f"Recording is incomplete (stopped before the replay's end); kept {rlog} but not converted")
     data = convert.convert(rlog, src)
     print(f"Open viewer/index.html#{data.stem} in a browser.")
 

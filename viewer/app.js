@@ -657,16 +657,15 @@
   // ---------- players / kills ----------
   function renderPlayers() {
     const box = $("#playerStats");
-    const step = M.army.step, i = Math.floor(S.t / step);
+    const army = RV.armyAt(M, S.t);
     const rows = M.players.map(p => {
       const st = RV.statsAt(M, p.idx, S.t);
-      const a = M.army.players[String(p.idx)] || {};
-      const k = Math.min(i, (a.military || []).length - 1);
+      const a = army.get(p.idx);
       return h("tr", {},
         h("td", { class: "pname", title: p.name }, h("i", { class: "dot", style: { background: p.color } }), " ", p.name),
         h("td", {}, st ? st[1] : "-"), h("td", {}, st ? st[2] : "-"), h("td", {}, st ? st[3] : "-"), h("td", {}, st ? st[4] : "-"),
-        h("td", {}, st ? st[5] : "-"), h("td", {}, a.villagers ? a.villagers[k] : "-"), h("td", {}, a.military ? a.military[k] : "-"),
-        h("td", {}, a.armyValue ? fmtK(a.armyValue[k]) : "-"));
+        h("td", {}, st ? st[5] : "-"), h("td", {}, a.villagers), h("td", {}, a.military),
+        h("td", {}, fmtK(a.armyValue)));
     });
     box.textContent = "";
     box.append(h("table", {},

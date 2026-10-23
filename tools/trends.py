@@ -107,7 +107,8 @@ def pair(players: list[dict], aw: list[dict]) -> dict[int, dict]:
 
 def rows(matches: dict, games: dict) -> list[dict]:
     """One row per player and match, joined with aoe4world's result, civilization and rating. Players are keyed by
-    aoe4world profile; a name aoe4world never matched takes that name's profile from other games, else the name."""
+    aoe4world profile; a name aoe4world never matched takes that name's profile from other games when exactly one
+    profile carries it (two people can share a name), else stays keyed by the name."""
     out = []
     for stem, m in matches.items():
         if m["duration"] < MIN_GAME:
@@ -125,9 +126,14 @@ def rows(matches: dict, games: dict) -> list[dict]:
                 "vs": [aw[q["idx"]].get("civ") or q["civ"] for q in m["players"] if q["team"] != p["team"]],
                 **{k: v for k, v in p.items() if k not in ("idx", "name", "civ", "team")},
             })
-    profiles = {r["name"].casefold(): r["player"] for r in out if r["player"].startswith("p")}
+    profiles: dict[str, set[str]] = {}
     for r in out:
-        r["player"] = profiles.get(r["name"].casefold(), r["player"])
+        if r["player"].startswith("p"):
+            profiles.setdefault(r["name"].casefold(), set()).add(r["player"])
+    for r in out:
+        ids = profiles.get(r["name"].casefold(), set())
+        if r["player"].startswith("n") and len(ids) == 1:
+            r["player"] = next(iter(ids))
     return out
 
 

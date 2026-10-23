@@ -191,6 +191,11 @@ class Ent:
     def alive_at(self, t: float) -> bool:
         return any(s <= t and (e is None or t <= e) for s, e in self.spans)
 
+    def owner_at(self, t: float) -> int:
+        """The owner at time t (conversions and captures change it; `owner` is only the first)."""
+        i = bisect.bisect_right(self.owners, t, key=lambda o: o[0]) - 1
+        return self.owners[i][1] if i >= 0 else self.owner
+
 
 @dataclass
 class GaiaEnt:
@@ -393,10 +398,10 @@ def detect_fights(log: Log, values: dict[int, float], world: float) -> list[dict
         for i in range(4, len(tr), 4):
             dmg = tr[i - 1] - tr[i + 3]
             if dmg > 0.5 and tr[i] - tr[i - 4] <= 1.01:
-                events.append((tr[i], tr[i + 1], tr[i + 2], e.owner, dmg, e.id, False))
+                events.append((tr[i], tr[i + 1], tr[i + 2], e.owner_at(tr[i]), dmg, e.id, False))
         if e.killed:
             x, z, _ = e.position_at(e.died)
-            events.append((e.died, x, z, e.owner, 0.0, e.id, True))
+            events.append((e.died, x, z, e.owner_at(e.died), 0.0, e.id, True))
     events.sort()
 
     radius = world * 0.07
@@ -423,10 +428,7 @@ def detect_fights(log: Log, values: dict[int, float], world: float) -> list[dict
         best["events"].append(ev)
 
     by_id = {e.id: e for e in log.ents}
-    military_by_owner: dict[int, list[Ent]] = defaultdict(list)
-    for e in log.ents:
-        if classify(e.bp, e.building) in MILITARY:
-            military_by_owner[e.owner].append(e)
+    military = [e for e in log.ents if classify(e.bp, e.building) in MILITARY]
     attacks_by_time = sorted(log.attacks)
     times = [a[0] for a in attacks_by_time]
     fights = []
@@ -458,7 +460,7 @@ def detect_fights(log: Log, values: dict[int, float], world: float) -> list[dict
                 continue
             bx, bz, _ = eb.position_at(t)
             if math.hypot(bx - f["cx"], bz - f["cz"]) <= radius * 1.5:
-                participants.add(ea.owner)
+                participants.add(ea.owner_at(t))
                 units.add(a)
                 units.add(b)
         r = max(15.0, max(math.hypot(ev[1] - f["cx"], ev[2] - f["cz"]) for ev in evs))
@@ -466,13 +468,13 @@ def detect_fights(log: Log, values: dict[int, float], world: float) -> list[dict
         for u in units:
             eu = by_id[u]
             if classify(eu.bp, eu.building) in MILITARY:
-                engaged[eu.owner] += values.get(u, 0.0)
+                engaged[eu.owner_at(f["start"])] += values.get(u, 0.0)
         moved = {}  # average distance each side's nearby army closed toward the fight in the lead-up
         t0 = f["start"]
         for o in participants:
             closed = []
-            for e in military_by_owner.get(o, ()):
-                if not (e.alive_at(t0) and e.alive_at(t0 - APPROACH_LEAD)):
+            for e in military:
+                if not (e.alive_at(t0) and e.alive_at(t0 - APPROACH_LEAD)) or e.owner_at(t0) != o:
                     continue
                 x1, z1, _ = e.position_at(t0)
                 d1 = math.hypot(x1 - f["cx"], z1 - f["cz"])
@@ -508,14 +510,14 @@ def army_series(log: Log, values: dict[int, float], duration: float, step: float
         cat = classify(e.bp, e.building)
         if cat not in MILITARY and cat != "villager":
             continue
-        s = series.get(str(e.owner))
-        if s is None:
-            continue
         for start, end in e.spans:
-            end = duration if end is None else end
+            # half-open lifetimes: a unit gone at a grid point is not counted there; an open one reaches the end
             i0 = max(0, math.ceil(start / step))
-            i1 = min(n - 1, int(end // step))
+            i1 = n - 1 if end is None else min(n - 1, math.ceil(end / step) - 1)
             for i in range(i0, i1 + 1):
+                s = series.get(str(e.owner_at(i * step)))  # a converted unit counts for its owner at the time
+                if s is None:
+                    continue
                 if cat == "villager":
                     s["villagers"][i] += 1
                 else:
@@ -691,6 +693,7 @@ def convert(rlog: Path, rec_path: Path) -> Path:
         "name": rlog.stem,
         "replay": {"file": rec_path.name, "date": rep.date, "build": rep.version},
         "duration": duration,
+        "capturedEnd": log.samples[-1] if log.samples else log.header["start"],  # last sampled state; duration is the replay's
         "recordStart": log.header["start"],
         "world": {"width": log.header["width"], "length": log.header["length"]},
         "players": players,

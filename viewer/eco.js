@@ -542,7 +542,7 @@
   }
 
   function buildEnv(d, C, opts) {
-    const end = d.duration;
+    const end = d.capturedEnd ?? d.duration;  // held jobs are only known up to the last sample
     const teamOf = new Map(), enemies = new Map();
     for (const p of d.players) teamOf.set(p.idx, p.team);
     for (const p of d.players) enemies.set(p.idx, d.players.filter((q) => q.team !== p.team || p.team == null).map((q) => q.idx).filter((q) => q !== p.idx));

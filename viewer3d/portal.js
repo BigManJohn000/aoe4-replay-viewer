@@ -53,13 +53,17 @@ async function api(path, body) {
   } catch { return null; }
 }
 
-/** A classic data script (`window.X = <json>;`) read without running it; null when missing or unreadable. */
-async function scriptData(url) {
+/**
+ * One `window.<name> = <json>;` line of a classic data script, read without running it; null when missing or
+ * unreadable. index.js holds several such lines (REPLAY_INDEX, REPLAY_NOTED), one per line.
+ */
+async function scriptData(url, name) {
   try {
     const r = await fetch(url, { cache: 'no-store' });
     if (!r.ok) return null;
-    const text = await r.text();
-    return JSON.parse(text.slice(text.indexOf('=') + 1).trim().replace(/;$/, ''));
+    const prefix = `window.${name} = `;
+    const line = (await r.text()).split('\n').find((l) => l.startsWith(prefix));
+    return line ? JSON.parse(line.slice(prefix.length).trim().replace(/;$/, '')) : null;
   } catch { return null; }
 }
 
@@ -117,7 +121,8 @@ function renderList() {
 }
 
 async function loadRecordings() {
-  const [names, trends] = await Promise.all([scriptData('shared/data/index.js'), scriptData('shared/data/trends/games.js')]);
+  const [names, trends] = await Promise.all([scriptData('shared/data/index.js', 'REPLAY_INDEX'),
+    scriptData('shared/data/trends/games.js', 'TRENDS')]);
   if (!names) { el('mList').innerHTML = '<p class="warn">Could not read the recordings list (shared/data/index.js).</p>'; return; }
   list = recordings(names, trends);
   renderList();

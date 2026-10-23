@@ -673,4 +673,23 @@ window.RV = window.RV || {};
   RV.isUnit = cat => cat !== "building" && cat !== "attachment" && cat !== "other";
   const MILITARY = new Set(window.RV_UNITS.military);
   RV.isMilitary = cat => MILITARY.has(cat);
+
+  /**
+   * Living villagers, military units and army value per player index at time t, from the entities themselves (the
+   * 5 s army series is for charts: its first bucket is time 0, before the recording starts). Cached for the last t.
+   */
+  RV.armyAt = function (M, t) {
+    if (M.armyAtT === t) return M.armyAtV;
+    if (!M.armyEnts) M.armyEnts = M.ents.filter(e => e.cat === "villager" || MILITARY.has(e.cat));
+    const out = new Map(M.players.map(p => [p.idx, { villagers: 0, military: 0, armyValue: 0 }]));
+    for (const e of M.armyEnts) {
+      if (!RV.alive(e, t)) continue;
+      const a = out.get(RV.ownerAt(e, t));
+      if (!a) continue;
+      if (e.cat === "villager") a.villagers++;
+      else { a.military++; a.armyValue += e.value; }
+    }
+    M.armyAtT = t; M.armyAtV = out;
+    return out;
+  };
 })(window.RV);

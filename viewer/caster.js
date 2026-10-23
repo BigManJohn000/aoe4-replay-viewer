@@ -98,7 +98,7 @@
       sides.push({ p, badge, resultBadge, vil, mil, pop, vilBar, milBar, resources, ticker, idle, overflow, slots: [],
         debts, debtSlots, windows: debtPlayers.find(pl => pl.p.idx === p.idx).windows,
         stats: series((d.stats && d.stats[p.idx]) || []), jobs: series((d.jobs && d.jobs[p.idx]) || []),
-        ages: series(ageRows), army: (d.army && d.army.players[p.idx]) || {},
+        ages: series(ageRows),
         completed: { rows: upgrades, times: Float64Array.from(upgrades, u => u.t) },
         starts: { rows: starts, times: Float64Array.from(starts, u => u.start) },
         maxResearch: upgrades.reduce((m, u) => Math.max(m, u.t - u.start), 0),
@@ -191,10 +191,9 @@
       if (!on || t === previousTime) return;
       previousTime = t;
       let maxValue = 1;
+      const army = RV.armyAt(M, t);
       for (const s of sides) {
-        const a = s.army, sample = Math.floor(t / ((d.army && d.army.step) || 1));
-        const v = a.villagers ? a.villagers[Math.min(sample, a.villagers.length - 1)] : null;
-        const m = a.military ? a.military[Math.min(sample, a.military.length - 1)] : null;
+        const a = army.get(s.p.idx), v = a.villagers, m = a.military;
         const st = at(s.stats, t), job = at(s.jobs, t), age = at(s.ages, t), kills = at(s.killed, t);
         text(s.badge, AGES[age ? ageOf(age[2]) : 0]);
         if (s.resultBadge) {
@@ -213,7 +212,7 @@
         }
         research(s, t);
         debt(s, t, showDebt);
-        s.value = a.armyValue ? a.armyValue[Math.min(sample, a.armyValue.length - 1)] || 0 : 0;
+        s.value = a.armyValue;
         maxValue = Math.max(maxValue, s.value);
         text(s.armyLabel, number(s.value));
         text(s.killLabel, "Killed " + number(kills ? kills[1] : 0));
