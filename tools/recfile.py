@@ -77,6 +77,20 @@ class Chat:
 
 
 COMMAND_KINDS = {0x03: "train", 0x10: "research", 0x7B: "build"}
+COMMAND_NAMES = {
+    0x03: "CMD_BuildSquad", 0x05: "CMD_CancelProduction", 0x07: "CMD_Move",
+    0x0C: "CMD_RallyPoint", 0x0E: "CMD_Ability", 0x10: "CMD_Upgrade",
+    0x14: "CMD_UnloadSquads", 0x16: "CMD_AttackForced", 0x38: "CMD_CancelConstruction",
+    0x3E: "SCMD_Move", 0x3F: "SCMD_Stop", 0x41: "SCMD_BuildStructure",
+    0x42: "SCMD_Capture", 0x43: "SCMD_Attack", 0x47: "SCMD_AttackMove",
+    0x48: "SCMD_Ability", 0x49: "SCMD_Load", 0x4C: "SCMD_Unload",
+    0x69: "SCMD_Gather", 0x6C: "SCMD_Trade", 0x6D: "SCMD_HoldPosition",
+    0x72: "SCMD_StopAbility", 0x74: "SCMD_AddPatrolPoint",
+    0x7B: "PCMD_PlaceAndConstructEntities", 0x82: "PCMD_Upgrade",
+    0x8B: "PCMD_AIPlayer", 0x8F: "PCMD_BroadcastMessage",
+    0x92: "PCMD_FormationSquadGroupCreateBegin", 0x94: "PCMD_FormationSquadGroupCreateEnd",
+    0x99: "DCMD_CameraTrack", 0x9A: "DCMD_VisibilityInfo",
+}
 CAMERA_TRACK = 0x99
 ABILITY_COMMANDS = {0x0E: "entity", 0x48: "squad"}  # CMD_Ability (entity receivers), SCMD_Ability (squad receivers)
 ENTITY_ID_BASE = 1000005000  # receiver entity index + this = SCAR entity id
@@ -243,13 +257,44 @@ class Replay:
                     out.append(Command(t.tick, player - 1000, kind, pbgid, pos))
         return out
 
+    def orders(self) -> Iterator[tuple[int, int, int, bool, int, str | None, tuple[float, float] | None]]:
+        """Yield (tick, pid, type, queued, n_receivers, receiver_kind, target_pos) for every command type.
+
+        Types are raw bytes (known names in COMMAND_NAMES), including camera/UI commands. The player and queue
+        flag come from byte 3, not the optional player id at 20; the order sequence occupies bytes 4–7.
+        Receiver kinds are player/entity/squad, mixed, or None for an empty list. Receiver indices use the
+        ENTITY_ID_BASE and SQUAD_ID_BASE offsets; this summary returns their count, not their ids.
+        Positions are ground (x, z); absent, non-position and undocumented targets return None.
+        """
+        kinds = {0: "player", 1: "entity", 2: "squad"}
+        target_offsets = {1: 0, 3: 0, 6: 4, 30: 0, 37: 10, 42: 6}
+        for t in self.ticks():
+            for _host, payload in t.blocks:
+                for c in block_commands(payload):
+                    if len(c) < 26:
+                        continue
+                    recv = receivers(c)
+                    receiver_kinds = {kind for kind, _index in recv}
+                    receiver_kind = (kinds.get(next(iter(receiver_kinds)), "unknown")
+                                     if len(receiver_kinds) == 1 else "mixed" if receiver_kinds else None)
+                    dtype, data = command_data(c)
+                    pos = None
+                    offset = target_offsets.get(dtype)
+                    if offset is not None and len(data) >= offset + 13 and data[offset] == 2:
+                        x, _y, z = struct.unpack_from("<fff", data, offset + 1)
+                        pos = (x, z)
+                    elif dtype == 27 and len(data) >= 17:
+                        x, _y, z = struct.unpack_from("<fff", data, 5)
+                        pos = (x, z)
+                    yield t.tick, c[3] & 0x7F, c[2], bool(c[3] & 0x80), len(recv), receiver_kind, pos
+
     def cameras(self) -> list[CameraSample]:
         """Every player's DCMD_CameraTrack samples, in stream order (sample ticks rise per player)."""
         out = []
         for t in self.ticks():
             for _host, payload in t.blocks:
                 for c in block_commands(payload):
-                    if c[2] != CAMERA_TRACK or len(c) < 53:
+                    if len(c) < 53 or c[2] != CAMERA_TRACK:
                         continue
                     pid = c[3] & 0x7F  # the u32 player @20 is 0 in DCMD records
                     tick, x, y, z = struct.unpack_from("<Iiii", c, 27)
@@ -259,27 +304,28 @@ class Replay:
         return out
 
     def abilities(self) -> list[AbilityUse]:
-        """Every CMD_Ability / SCMD_Ability order, in game order. Data type 36 is 01 + u32 ability PBG; 37 and 42 add a
-        target at data offset 10: u8 kind (2 position f32 x, y, z; 3 entity id; 4 squad id, both full SCAR ids). A
-        self-centred ability such as monk_conversion targets the caster's own squad."""
+        """Every CMD_Ability / SCMD_Ability order, in game order. Data type 36 is 01 + u32 ability PBG; types 37 and 42
+        add a target at data offsets 10 and 6 respectively: u8 kind (2 position f32 x, y, z; 3 entity id; 4 squad id,
+        both full SCAR ids). A self-centred ability such as monk_conversion targets the caster's own squad."""
         out = []
         for t in self.ticks():
             for _host, payload in t.blocks:
                 for c in block_commands(payload):
-                    kind = ABILITY_COMMANDS.get(c[2])
-                    if kind is None or len(c) < 30:
+                    kind = ABILITY_COMMANDS.get(c[2]) if len(c) >= 30 else None
+                    if kind is None:
                         continue
                     dtype, data = command_data(c)
                     if dtype not in (36, 37, 42) or len(data) < 5:
                         continue
                     target = None
-                    if dtype != 36 and len(data) >= 15:
-                        tk = data[10]
-                        if tk == 2 and len(data) >= 23:
-                            x, _y, z = struct.unpack_from("<fff", data, 11)
+                    offset = 6 if dtype == 42 else 10
+                    if dtype != 36 and len(data) >= offset + 5:
+                        tk = data[offset]
+                        if tk == 2 and len(data) >= offset + 13:
+                            x, _y, z = struct.unpack_from("<fff", data, offset + 1)
                             target = ("pos", x, z)
                         elif tk in (3, 4):
-                            target = ("entity" if tk == 3 else "squad", struct.unpack_from("<I", data, 11)[0])
+                            target = ("entity" if tk == 3 else "squad", struct.unpack_from("<I", data, offset + 1)[0])
                     base = SQUAD_ID_BASE if kind == "squad" else ENTITY_ID_BASE
                     out.append(AbilityUse(t.tick, struct.unpack_from("<I", c, 20)[0] - 1000,
                                           struct.unpack_from("<I", data, 1)[0],

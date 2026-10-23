@@ -47,7 +47,7 @@ length.
 | 21 | 01 + u32 PBG + u32 player id + u16 flags |
 | 23 | u32 + u32 length + ASCII text |
 | 27 | placement |
-| 30 | position + direction floats |
+| 30 | target kind (2 = position f32 x,y,z), then direction |
 | 32 | entity load |
 | 36 | 01 + u32 ability PBG |
 | 37 | ability + target |
@@ -101,10 +101,14 @@ Notes on individual types:
   player slot per entry (*inferred*: tribute panel state). It is not a ping or a flare.
 - 0x0e CMD_Ability / 0x48 SCMD_Ability: receivers @24 are entities (index + 1000005000 = SCAR entity id) or squads
   (index + 50000 = SCAR squad id: 672 of 672 data-type 36/37/42 casts in aoe4_256829909 and aoe4_245598603 name
-  units of the casting player). Data type 36 is `01`, u32 ability PBG. Types 37 and 42 add a target at data offset
-  10: u8 kind, then 2 = position (f32 x, y, z), 3 = entity, 4 = squad (u32 full SCAR ids). The monk's area
-  conversion (`monk_conversion`, PBG 192685) targets the caster's own squad. `Replay.abilities()` reads them;
-  `tools/convert.py` writes conversion casts into the viewer data (`conversions`).
+  units of the casting player). Data type 36 is `01`, u32 ability PBG. Type 37 adds a target at data offset
+  10; type 42 puts it at offset 6: u8 kind, then 2 = position (f32 x, y, z), 3 = entity, 4 = squad (u32 full SCAR ids).
+  Verified from replay command payloads: all 324 type-42 casts in the corpus have kind 2 at offset 6; sampled type-30
+  commands likewise begin with kind 2 before their position floats.
+  The monk's area conversion (`monk_conversion`, PBG 192685) targets the caster's own squad.
+  `Replay.abilities()` reads casts; `Replay.orders()` summarizes every command type, including queued flags,
+  receiver counts/kinds and known target positions. `tools/convert.py` writes conversion casts into viewer data
+  (`conversions`).
 - 0x99 DCMD_CameraTrack (data type 48, 26 bytes):
   - u32 sample tick
   - i32 eye x, y, z in cm
