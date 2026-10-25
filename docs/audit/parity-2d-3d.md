@@ -166,9 +166,8 @@ product gaps.
    c. "vs 2000+" benchmarks → 3D (load `shared/rv_bench.js`, one call site in the card).
    d. Range rings → 3D (selection already has `RV_FRAME` reach; `map.js:403` is the reference).
    e. Caster HUD: keep 2D-only (broadcast layout does not fit the 3D drawer) but state it in the capability table.
-10. **Documentation gate.** README's parity claims, the screenshots in `docs/screenshots/` (the 2D screenshot predates
-    the current Combat/Layers popovers) and the "what is shared" table must be regenerated from the same registry, or
-    they become the next source of drift.
+10. **Documentation gate.** README's parity claims, the screenshots in `docs/screenshots/` and the "what is shared"
+    table must be regenerated from the same registry, or they become the next source of drift.
 
 ---
 

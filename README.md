@@ -7,8 +7,8 @@ in a **2D tactical map** or a **3D battlefield** you can scrub, pause and inspec
 ![3D viewer: May (Delhi Sultanate) and Beasty (HRE) fighting at 21:23 on Dry Arabia](docs/screenshots/viewer3d.png)
 
 <p align="center"><sub>3D viewer: the included showcase match, 21:23. Beasty's men-at-arms, rams and mangonels break into
-May's town; the Fights tab shows that fight's card (value lost, pre-fight odds vs the actual winner, grades) and the
-unit card follows a selected man-at-arms.</sub></p>
+May's town; the Fights tab shows that fight's card (value lost, model estimate vs trade result, micro rating, army swing,
+eco window) and the unit card shows a selected man-at-arms.</sub></p>
 
 ## Why it needs the game
 

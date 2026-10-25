@@ -2,7 +2,7 @@
 
 **Scope.** Read-only review of `viewer/index.html`, `viewer/style.css`, `viewer/app.js`, `viewer/map.js`, `viewer/caster.js`, `viewer/timeline.js`, `viewer/fightpanel.js`, `viewer/ecopanel.js`, `viewer/card.js`, `viewer3d/index.html`, `viewer3d/panels.js`, `viewer3d/hud.js`, `viewer3d/marks.js`, the UI-construction parts of `viewer3d/viewer.js` (grep + line ranges), `viewer3d/portal.js`, `README.md:110-156`, and the four screenshots. No file was modified except this report; `viewer/data/*.js` and `viewer3d/viewer.js` were not read end-to-end.
 
-**Screenshot caveat.** `docs/screenshots/viewer2d.png` and `reference/what-changed/*` show an older 2D chrome: one flat top-bar row with `Attacks / Target fire / Combat FX / Trails / Orders / Eco orders / Labels / Relief / Resources / Army comp / Cameras / Key`, no **Panels**, **HUD details**, **Combat** or **Layers** popovers, and a `Combat FX` checkbox that no longer exists (current 2D splits it into Damage, Heals, Projectiles, Splash rings). That screenshot is still useful for proportions and the map overlays, but its control labels are stale. `viewer3d.png` matches the current 3D shell.
+**Screenshot caveat.** `reference/what-changed/*` shows an older 2D chrome: one flat top-bar row with `Attacks / Target fire / Combat FX / Trails / Orders / Eco orders / Labels / Relief / Resources / Army comp / Cameras / Key`, no **Panels**, **HUD details**, **Combat** or **Layers** popovers, and a `Combat FX` checkbox that no longer exists (current 2D splits it into Damage, Heals, Projectiles, Splash rings). Those screenshots are still useful for proportions and the map overlays, but their control labels are stale. `docs/screenshots/viewer2d.png` and `viewer3d.png` were re-captured against the current UI.
 
 ---
 
