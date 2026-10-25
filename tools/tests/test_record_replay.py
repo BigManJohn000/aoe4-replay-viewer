@@ -72,15 +72,17 @@ class RecordReplayTests(unittest.TestCase):
     def test_completion_rejects_interior_errors_and_gaps(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / 'test.rlog'
-            header = 'HDR|5|1|100|100|2\n'
-            for records, expected in [
-                ('T|1\nT|1.5\nT|2\n', True),
-                ('T|1\nERR|sample|failure\nT|1.5\nT|2\n', False),
-                ('T|1\nT|2.5\n', False),
-                ('T|1\nT|2\n', True),
-                ('T|2\nT|1.5\nT|2\n', False),
+            current = f'HDR|{self.recorder.grammar.VERSION}|1|100|100|2\n'
+            older = f'HDR|{self.recorder.grammar.VERSION - 1}|1|100|100|2\n'
+            for header, records, expected in [
+                (current, 'T|1\nT|1.5\nT|2\n', True),
+                (current, 'T|1\nERR|sample|failure\nT|1.5\nT|2\n', False),
+                (current, 'T|1\nT|2.5\n', False),
+                (current, 'T|1\nT|2\n', True),
+                (current, 'T|2\nT|1.5\nT|2\n', False),
+                (older, 'T|1\nT|1.5\nT|2\n', False),
             ]:
-                with self.subTest(records=records):
+                with self.subTest(header=header, records=records):
                     path.write_text(header + records, encoding='utf-8')
                     self.assertEqual(self.recorder.is_complete(path, 3), expected)
 

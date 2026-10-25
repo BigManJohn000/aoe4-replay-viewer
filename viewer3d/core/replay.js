@@ -334,6 +334,59 @@ export function locateGaia(g, t) {
   }
   g.px = x; g.pz = z;
 }
+
+/** Infer carrying only from two consecutive moving relic segments following one unique living monk.
+ * No pickup/deposit events are recorded. Do not bridge sampling gaps, guess from static proximity,
+ * or extend past the last confirmed sample. Each object and carrier share the same seekable intervals.
+ */
+export function linkRelicCarriers(ents, gaia) {
+  const monks = ents.filter((e) => e.cat === 'religious');
+  for (const e of monks) e.relicCarries = [];
+  for (const g of gaia) {
+    if (g.kind !== 'relic') continue;
+    g.relicCarries = [];
+    if (!g.trT) continue;
+    let run = null;
+    const finish = () => {
+      if (run && run.samples >= 2) { g.relicCarries.push(run); run.e.relicCarries.push(run); }
+      run = null;
+    };
+    for (let i = 1; i < g.trT.length; i++) {
+      const a = g.trT[i - 1], b = g.trT[i];
+      if (b - a > 2.1 || b <= a || !alive(g, a) || !alive(g, b)
+          || Math.hypot(g.trX[i] - g.trX[i - 1], g.trZ[i] - g.trZ[i - 1]) < 0.25) { finish(); continue; }
+      let carrier = null, ambiguous = false;
+      for (const e of monks) {
+        // Require one continuous alive span, so neither death nor garrison/absence is bridged.
+        if (!Array.from(e.spans).some((s, j) => j % 2 === 0 && a >= s && b < e.spans[j + 1])) continue;
+        const p = locate(e, a);
+        if (Math.hypot(p.x - g.trX[i - 1], p.z - g.trZ[i - 1]) > 0.75) continue;
+        const q = locate(e, b);
+        if (Math.hypot(q.x - g.trX[i], q.z - g.trZ[i]) > 0.75) continue;
+        if (carrier) { ambiguous = true; break; }
+        carrier = e;
+      }
+      if (!carrier || ambiguous) { finish(); continue; }
+      if (run?.e === carrier && run.end === a) { run.end = b; run.samples++; }
+      else { finish(); run = { e: carrier, g, start: a, end: b, samples: 1, inferred: true }; }
+    }
+    finish();
+  }
+  for (const e of monks) e.relicCarries.sort((a, b) => a.start - b.start);
+}
+
+/** Returns no carrier if two relic tracks claim the same monk at this time. */
+export function relicCarryAt(o, t) {
+  if (!o.relicCarries) return null;
+  let match = null;
+  for (const r of o.relicCarries) {
+    if (t < r.start || t >= r.end || !alive(r.e, t) || !alive(r.g, t)) continue;
+    if (match) return null;
+    match = r;
+  }
+  if (!match || o === match.e) return match;
+  return relicCarryAt(match.e, t) === match ? match : null;
+}
 /** How many villagers work g at t (its Replay.villagerJobs stands); out, when given, gets their ids. */
 export function workersAt(g, t, out) {
   if (out) out.length = 0;
@@ -442,6 +495,7 @@ export class Replay {
     this.army = d.army ?? null;
     this.terrain = d.terrain ?? null;
     this.gaia = prepGaia(d.gaia);
+    linkRelicCarriers(this.ents, this.gaia);
     this.sheepCorpses();
     this.villagerJobs();
     this.scanPhase = scanPhase(this.gaia);

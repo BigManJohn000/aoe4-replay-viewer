@@ -24,7 +24,7 @@
     showTerrain: true, showResources: true, showComp: true, showCams: false, showCaster: true, showEcoDebt: true,
     selected: null, group: null, hover: null, follow: false, followAction: false, fight: null, dirty: true, mouse: null,
   };
-  let M, map, tl, caster, director;
+  let M, map, tl, caster, director, replayAudio;
   let anchorWall = performance.now(), anchorT = S.t;
   const reanchor = (now = performance.now()) => { anchorWall = now; anchorT = S.t; S.dirty = true; };
   const clockTime = now => Math.min(M.duration, anchorT + (now - anchorWall) / 1000 * SPEEDS[S.speedIdx]);
@@ -104,10 +104,23 @@
     }
     requestAnimationFrame(frame);
     RV.app = { M, S, map, tl, notes }; // console access for debugging
+    // Reuse the 3D model's inferred work/relic intervals so the two viewers sound alike.
+    const audioRoot = location.pathname.startsWith('/shared/') ? '../' : '../viewer3d/';
+    import(audioRoot + 'core/replay.js').then(({Replay}) => {
+      const r = new Replay(d, window.RV_UNITS, window.RV_FRAME);
+      replayAudio = window.RV_AUDIO.mount({
+        d, ents: r.ents, combat: M.combat, conversions: M.conversions, gaia: r.gaia, alerts: M.alerts,
+        base: audioRoot + 'assets/audio/', state: () => ({t: S.t, playing: S.playing, speed: SPEEDS[S.speedIdx]}),
+        listener: () => ({x: map.camX, z: map.camZ, rightX: map.tc, rightZ: -map.ts, radius: Math.max(45, map.w / map.scale * .55)}),
+        ownerVisible: owner => !!(S.viewMask & (1 << (owner - 1))), visible: (e, t) => RV.visibleTo(e, t, S.viewMask),
+      });
+      RV.app.replayAudio = replayAudio;
+    }).catch(() => showNotice('Audio needs the local replay server. Open this replay through Replay Recorder.'));
   }
 
   // ---------- state actions ----------
   S.seek = t => {
+    replayAudio?.reset();
     S.t = Math.max(0, Math.min(M.duration, t));
     director.cut();
     reanchor();
@@ -116,6 +129,7 @@
   // One unit or building (click), or clear with null; either ends a highlight.
   S.select = e => {
     S.selected = e;
+    replayAudio?.select(e);
     S.group = null;
     if (!e) S.follow = false;
     S.dirty = true;
@@ -171,6 +185,7 @@
   }
   function toggleFollowAction() {
     S.followAction = !S.followAction;
+    map.shotScene = null; // the first shot may cut straight to the action
     if (S.followAction && S.follow) { S.follow = false; renderUnit(true); }
     S.dirty = true;
   }
@@ -955,6 +970,7 @@
     }
     if (S.followAction && map.chase(director.shot(S.t), dt)) S.dirty = true;
     caster.update(S.t, S.showCaster, now, S.showEcoDebt);
+    replayAudio?.update();
     if (S.dirty) {
       S.dirty = false;
       RV.updateFrame(M, S.t);

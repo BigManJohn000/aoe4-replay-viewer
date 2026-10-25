@@ -104,10 +104,10 @@
     box.append(card);
 
     // ── Main card 1: who won and the value lost ──
-    card.append(el("div", { class: "rvf-h", title: "Resources (food + wood + gold + stone) of the units and buildings each team lost in this fight" }, duel ? "Who won · value lost" : "Per-team value lost"));
+    card.append(el("div", { class: "rvf-h", title: "Resources (food + wood + gold + stone) of the units and buildings each team lost in this fight" }, duel ? "Resource trade · value lost" : "Per-team value lost"));
     if (duel) {
       card.append(el("div", { class: "rvf-win", title: "The winner is the side that lost less army + villager value; within 10 % counts as an even trade" },
-        L.actual === null ? "Even trade" : [who(L.actual === "A" ? L.A : L.B), " won"]));
+        L.actual === null ? "Even trade" : [who(L.actual === "A" ? L.A : L.B), " won the army/villager trade"]));
     }
     const maxLost = Math.max(1, ...A.teams.map((tm) => A.lost.total[tm] || 0));
     const present = new Set();
@@ -130,10 +130,10 @@
     // ── Main card 2: expected vs actual ──
     const odds = duel && L.predicted !== null;
     if (odds) {
-      card.append(el("div", { class: "rvf-h", title: "Odds from each side's army at the start of the fight: damage per second × total hit points (a square-law estimate, calibrated on recorded fights)" }, "Expected vs actual"));
-      card.append(el("div", {}, "Pre-fight odds: ", who(L.A), ` ${Math.round(L.p * 100)}% · `, who(L.B), ` ${Math.round((1 - L.p) * 100)}%`),
+      card.append(el("div", { class: "rvf-h", title: "Estimated from starting strength; later participation and building fire also inform the model" }, "Model estimate vs trade result"));
+      card.append(el("div", {}, "Estimated odds: ", who(L.A), ` ${Math.round(L.p * 100)}% · `, who(L.B), ` ${Math.round((1 - L.p) * 100)}%`),
         el("div", { class: "rvf-odds" }, el("div", { style: { width: `${L.p * 100}%`, background: color(L.A) } }), el("div", { style: { flex: "1", background: color(L.B) } })),
-        el("div", {}, "Actual winner: ", L.actual === null ? "even trade" : who(L.actual === "A" ? L.A : L.B),
+        el("div", {}, "Army/villager trade: ", L.actual === null ? "even" : who(L.actual === "A" ? L.A : L.B),
           L.correct === null ? "" : L.correct ? el("span", { class: "rvf-ok" }, " (as expected)") : el("span", { class: "rvf-up" }, " (upset)")));
     }
 
@@ -212,6 +212,11 @@
     // 2. What-if
     if (odds) {
       more.append(el("div", { class: "rvf-h", title: `Square law: strength = damage per second × total HP of each side's army at the start; win chance = logistic(ln(strength A / strength B) / ${L.tau})` }, "Win chance and what-if"));
+      more.append(el("div", { class: "rvf-muted" },
+        "Strength = effective DPS × current army HP. Odds use 1 / (1 + exp(−ln(strength A / strength B) / ", `${L.tau})). `,
+        "This is an approximate model tuned on 39 decided fights from one replay, not a validated forecast. Later participants and buildings that fired are included using their starting stats. ",
+        "Expected losses assume a fight to the death; retreats, pathing, abilities and reinforcement timing are not simulated. ",
+        "The trade result compares army + villager losses; buildings are shown in the loss bars but excluded from that result. A difference under 10% of the larger loss counts as even."));
       const bar = el("div", { class: "rvf-bar" });
       const drawBar = (p, base) => {
         bar.replaceChildren(el("div", { style: { width: `${p * 100}%`, background: color(L.A) } }, `${name(L.A)} ${pct(p)}`),
@@ -229,7 +234,8 @@
         if (!r) { drawBar(L.p, null); out.textContent = "Tick an upgrade to see how the odds would move."; return; }
         drawBar(r.p, r.base);
         const s = r.side, o = s === "A" ? "B" : "A";
-        out.textContent = `${name(r.team)} wins ${pct(r.base)} → ${pct(r.p)} (${r.dp >= 0 ? "+" : ""}${(r.dp * 100).toFixed(1)} pt); expected losses: ` +
+        const base = s === "A" ? r.base : 1 - r.base, chance = s === "A" ? r.p : 1 - r.p, delta = chance - base;
+        out.textContent = `${name(r.team)} wins ${pct(base)} → ${pct(chance)} (${delta >= 0 ? "+" : ""}${(delta * 100).toFixed(1)} pt); expected losses: ` +
           `${name(L[s])} ${k(r.baseExpected[s].lostValue)} → ${k(r.expected[s].lostValue)}, ${name(L[o])} ${k(r.baseExpected[o].lostValue)} → ${k(r.expected[o].lostValue)}`;
       };
       const radio = (s) => el("label", {}, el("input", { type: "radio", name: `rvf-wi-${A.id}`, checked: st.side === s, onchange: () => { st.side = s; apply(); } }), name(L[s]));
@@ -242,7 +248,10 @@
 
     // 3. Tug-of-war
     const T = A.tug;
-    more.append(el("div", { class: "rvf-h", title: duel ? "Resource value killed by side A minus side B over the fight; dots are deaths. Click to seek." : "Known hostile kills credited separately to each team." }, duel ? "Who was killing more (tug of war)" : "Per-team kills"));
+    more.append(el("div", { class: "rvf-h", title: duel ? "Resource value killed by side A minus side B in the surrounding fight area; dots are deaths. Click to seek." : "Known hostile kills credited separately to each team." }, duel ? "Nearby kills (tug of war)" : "Per-team nearby kills"));
+    more.append(el("div", { class: "rvf-muted" },
+      "This chart counts deaths within 1.5× the fight radius during its time window. The loss card uses events assigned to this fight, so nearby overlapping fights can make the totals differ.",
+      duel ? " When the killer is unknown, the opposing side receives inferred credit." : ""));
     more.append(el("div", { class: "rvf-muted" }, A.teams.map((tm) => `${name(tm)} killed ${k(T.final[tm])}`).join(" · ")));
     const cv = el("canvas", { title: "Click a point to go to that moment" });
     if (duel) more.append(cv);

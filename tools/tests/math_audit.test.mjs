@@ -23,6 +23,35 @@ function addStats(W, bp = 'test_unit', cost = 100) {
 }
 const near = (a, b) => assert.ok(Math.abs(a - b) < 1e-7, `${a} != ${b}`);
 
+test('fight what-if text reports the selected side probability, matching its losses and the A/B bar', () => {
+  const { W, context } = engines(); addStats(W);
+  const a = unit(1, 1, 0), b = unit(2, 2, 1);
+  const f = { id: 'probability-perspective', start: 0, end: 10, x: 0, z: 0, radius: 20, units: [1, 2], losses: {} };
+  const d = { duration: 20, players: players(), fights: [f], jobs: {}, stats: {}, techs: [], attacks: { times: [1], pairs: [[1, 2]] } };
+  const C = W.RV_FRAME.combat([a, b], d), A = W.RV_FIGHTS.analyze(d, C, f);
+  const nodes = [];
+  const el = (tag, attrs = {}, ...children) => {
+    const n = { tag, ...attrs, children: children.flat(Infinity).filter(x => x != null),
+      append(...xs) { this.children.push(...xs.flat(Infinity)); }, replaceChildren(...xs) { this.children = xs.flat(Infinity); },
+      addEventListener() {} };
+    nodes.push(n); return n;
+  };
+  W.RV_CARD = { el, grade: x => x };
+  context.document = { createElement: tag => el(tag), head: { append() {} } };
+  context.requestAnimationFrame = () => {};
+  new vm.Script(fs.readFileSync(new URL('../../viewer/fightpanel.js', import.meta.url), 'utf8')).runInContext(context);
+  W.RV_FIGHTPANEL.render(A, { t: 0 });
+  const radios = nodes.filter(n => n.tag === 'input' && n.type === 'radio');
+  const armor = nodes.find(n => n.tag === 'input' && n.type === 'checkbox' && !n['data-heat']);
+  radios[1].onchange(); armor.onchange({ target: { checked: true } });
+  const r = A.whatIf({ side: 'B', armor: 1, attack: 0 });
+  const out = nodes.find(n => typeof n.textContent === 'string' && n.textContent.includes('expected losses:'));
+  assert.ok(out.textContent.startsWith(`P2 wins ${Math.round((1 - r.base) * 100)} % → ${Math.round((1 - r.p) * 100)} % (+`), out.textContent);
+  radios[0].onchange();
+  const ra = A.whatIf({ side: 'A', armor: 1, attack: 0 });
+  assert.ok(out.textContent.startsWith(`P1 wins ${Math.round(ra.base * 100)} % → ${Math.round(ra.p * 100)} % (+`), out.textContent);
+});
+
 test('M-03: ledger uses first-birth resource quotes, including zero, with catalogue fallback', () => {
   const { W } = engines(); addStats(W, 'test_unit', 600);
   const ents = [1, 2, 3, 4].map(id => ({ ...unit(id, 1), born: 10, cat: 'building' }));

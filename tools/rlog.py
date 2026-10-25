@@ -2,8 +2,9 @@
 record types), and tools/convert.py reads it from here.
 
 records(lines, kinds) yields (record type, record) with one typed NamedTuple per record; a line holding several
-records (N, S, O, A, V, X, D, GN, GS, GA, GX: fields separated by "|", records inside the last field by ";") yields one
-item per record, in file order. Record types this module does not know (R|SUM and the like) are skipped.
+records (N, S, O, A, V, X, D, GN, GS, GA, GX, H, F, FL, I, BI, PQ, IS: fields separated by "|", records inside the last
+field by ";") yields one item per record, in file order. Record types this module does not know (R|SUM and the like)
+are skipped.
 Constants mirror recorder.lua, so a change there is made here only.
 """
 from __future__ import annotations
@@ -27,6 +28,19 @@ KILL = "K"
 UPGRADE = "U"
 CONSTRUCTION = "C"
 COST = "B"
+UPGRADE_QUEUED = "UQ"
+UPGRADE_CANCELLED = "UX"
+CONSTRUCTION_START = "CS"
+CONSTRUCTION_WORKER = "CW"
+CONSTRUCTION_CANCELLED = "CX"
+STRATEGIC_POINT = "SP"
+HIT = "H"
+PROJECTILE = "F"
+PROJECTILE_LANDED = "FL"
+INCOME = "I"
+BUILT = "BI"
+QUEUE = "PQ"
+IDLE = "IS"
 DEST = "D"
 SAMPLE = "T"
 GAIA_NEW = "GN"
@@ -38,7 +52,7 @@ HEIGHT_ROW = "HM"
 ERROR = "ERR"
 
 # Recorder constants
-VERSION = 5                # RR_VERSION
+VERSION = 6                # RR_VERSION
 MAX_RECS = 60              # RR_MAXREC: records per line
 TICKS_PER_SECOND = 8       # sim ticks; the recorder samples every RR_INTERVAL = 0.5 s
 TICKS_PER_SAMPLE = 4
@@ -148,6 +162,7 @@ class Stats(NamedTuple):
     idx: int
     res: tuple[int, ...]  # food, wood, gold, stone (and more in later versions)
     pop: int
+    cap: int = -1  # population cap; v6 on
 
 
 class Jobs(NamedTuple):
@@ -158,7 +173,53 @@ class Jobs(NamedTuple):
 
 class Context(NamedTuple):
     t: float
-    fields: dict[str, str]  # K, U and C records: key=value pairs of the game event
+    fields: dict[str, str]  # K, U, C, UQ, UX, CS, CW, CX and SP records: key=value pairs of the game event
+
+
+class Hit(NamedTuple):
+    t: float
+    attacker: int  # 0: no attacker (deleted, game over)
+    victim: int
+    damage: float
+    health: float  # the victim's health after the hit
+    shield: float
+    repair: bool  # a repair tick, not combat
+
+
+class Projectile(NamedTuple):
+    t: float
+    attacker: int
+    projectile: int
+    target: int  # 0: a ground target at x, z (None when neither is known)
+    x: float | None
+    z: float | None
+
+
+class Income(NamedTuple):
+    t: float
+    idx: int
+    res: tuple[float, ...]  # food, wood, gold, stone credited
+
+
+class Built(NamedTuple):
+    t: float
+    idx: int
+    bp: str
+    squad: int
+
+
+class Queue(NamedTuple):
+    t: float
+    id: int  # building
+    size: int
+    kind: str  # head item: spawn, upgrade, playerupgrade, squadupgrade, reinforce; "-" when the queue is empty
+    bp: str  # head item blueprint; "-" when empty
+
+
+class Idle(NamedTuple):
+    t: float
+    squad: int
+    idle: bool
 
 
 class Sample(NamedTuple):
@@ -272,7 +333,7 @@ def _cost(p):
 
 def _stats(p):
     res = tuple(int(x) for x in p[3].split(",")) if p[3] else ()
-    return [Stats(float(p[1]), int(p[2]), res, int(p[4]))]
+    return [Stats(float(p[1]), int(p[2]), res, int(p[4]), int(p[5]) if len(p) > 5 else -1)]
 
 
 def _jobs(p):
@@ -281,6 +342,37 @@ def _jobs(p):
 
 def _context(p):
     return [Context(float(p[1]), parse_kv("|".join(p[2:]), ";"))]
+
+
+def _hit(p):
+    t = float(p[1])
+    return [Hit(t, int(f[0]), int(f[1]), float(f[2]), float(f[3]), float(f[4]), f[5] == "1") for f in _recs(p)]
+
+
+def _projectile(p):
+    t = float(p[1])
+    return [Projectile(t, int(f[0]), int(f[1]), int(f[2]), *((None, None) if f[3] == "-" else (float(f[3]), float(f[4]))))
+            for f in _recs(p)]
+
+
+def _income(p):
+    t = float(p[1])
+    return [Income(t, int(f[0]), tuple(float(x) for x in f[1:])) for f in _recs(p)]
+
+
+def _built(p):
+    t = float(p[1])
+    return [Built(t, int(f[0]), f[1], int(f[2])) for f in _recs(p)]
+
+
+def _queue(p):
+    t = float(p[1])
+    return [Queue(t, int(f[0]), int(f[1]), f[2], f[3]) for f in _recs(p)]
+
+
+def _idle(p):
+    t = float(p[1])
+    return [Idle(t, int(f[0]), f[1] == "1") for f in _recs(p)]
 
 
 def _sample(p):
@@ -319,7 +411,10 @@ _DECODERS: dict[str, Callable[[list[str]], list]] = {
     ATTACK: _attack, VISION: _vision, ENT_GONE: _gone, STATS: _stats, JOBS: _jobs, KILL: _context,
     UPGRADE: _context, CONSTRUCTION: _context, COST: _cost, DEST: _dest, SAMPLE: _sample, GAIA_NEW: _gaia_new,
     GAIA_MOVED: _gaia_moved, GAIA_AMOUNT: _gaia_amount, GAIA_GONE: _gone, HEIGHT_HEADER: _height_header,
-    HEIGHT_ROW: _height_row, ERROR: _error,
+    HEIGHT_ROW: _height_row, ERROR: _error, UPGRADE_QUEUED: _context, UPGRADE_CANCELLED: _context,
+    CONSTRUCTION_START: _context, CONSTRUCTION_WORKER: _context, CONSTRUCTION_CANCELLED: _context,
+    STRATEGIC_POINT: _context, HIT: _hit, PROJECTILE: _projectile, PROJECTILE_LANDED: _projectile, INCOME: _income,
+    BUILT: _built, QUEUE: _queue, IDLE: _idle,
 }
 
 

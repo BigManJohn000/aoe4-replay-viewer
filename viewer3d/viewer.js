@@ -83,7 +83,7 @@ import { Pass, FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import { Sky } from 'three/addons/objects/Sky.js';
 import {
   Replay, idxAt, alive, ownerAt, place, tripAt, visibleTo, locateGaia, workersAt, wallAt, prettyCiv, fmtTime, clamp, hash01, hash3,
-  SAMPLE, ROMAN, TAU, JOBS, J_FARM, J_WOOD, CARRY, HOLD,
+  SAMPLE, ROMAN, TAU, JOBS, J_FARM, J_WOOD, CARRY, HOLD, relicCarryAt,
 } from './core/replay.js';
 import { initPortal, openMatches, showNotice } from './portal.js';
 import { Marks } from './marks.js';
@@ -1037,6 +1037,14 @@ const state = {
   followAction: false, // Follow action (G): the camera goes where the fighting is (shared director.js)
 };
 let anchorWall = performance.now(), anchorT = state.t;
+const replayAudio = window.RV_AUDIO.mount({
+  d: R.d, ents: R.ents, combat: R.combat, conversions: M2.conversions, gaia: R.gaia, alerts: M2.alerts,
+  base: 'assets/audio/', state: () => ({t: state.t, playing: state.playing, speed: state.speed}),
+  listener: () => ({x: controls.target.x, z: -controls.target.z, radius: Math.max(45, camera.position.distanceTo(controls.target) * .8),
+    rightX: Math.cos(controls.getAzimuthalAngle()), rightZ: Math.sin(controls.getAzimuthalAngle())}),
+  ownerVisible: owner => state.players.has(owner) && (!state.vision || !!(state.vision & (1 << (owner - 1)))),
+  visible: (e, t) => state.cats.has(e.cat) && state.players.has(ownerAt(e, t)) && (!state.vision || visibleTo(e, t, state.vision)),
+});
 const reanchor = (now = performance.now()) => { anchorWall = now; anchorT = state.t; invalidate(); };
 const clockTime = (now) => Math.min(R.t1, anchorT + (now - anchorWall) / 1000 * state.speed);
 document.addEventListener('visibilitychange', () => reanchor());
@@ -1744,6 +1752,7 @@ const fallAt = (g, t) => (t < g.fellT ? 0 : FALL_ANGLE * Math.min(1, (t - g.fell
 const _fp = new THREE.Vector3(), _fs = new THREE.Vector3(), _fk = new THREE.Vector3(), _gp = new THREE.Vector3();
 const _fq = new THREE.Quaternion(), _fr = new THREE.Quaternion(), _fm = new THREE.Matrix4();
 const _seatP = new THREE.Vector3(), _seatS = new THREE.Vector3(), _seatQ = new THREE.Quaternion(), _seatUp = new THREE.Vector3(0, 1, 0);
+const _relicLeft = new THREE.Vector3(), _relicRight = new THREE.Vector3();
 /** Unit vector (data space) a felled tree falls along: away from its first chopper (a hashed way if on top of it). */
 function fallDir(g, out) {
   const dx = g.x - g.chopX, dz = g.z - g.chopZ, d = Math.hypot(dx, dz);
@@ -1974,6 +1983,17 @@ class GaiaLayer {
     }
     v.heading += wrapAngle(g.heading - v.heading) * Math.min(1, dt * 6);
     v.group.rotation.set(0, v.heading, side ? Math.PI / 2 : 0);
+    const carry = g.kind === 'relic' ? relicCarryAt(g, t) : null, carrier = carry?.e.view;
+    if (carrier?.unit && carry.e.shown
+        && units.socketPosition(carrier, 'metarig_larmpalmsocket', _relicLeft)
+        && units.socketPosition(carrier, 'metarig_rarmpalmsocket', _relicRight)) {
+      // Relic assets are ground-origin objects. Centre the existing mesh between the animated palms.
+      const scale = 0.65 * carrier.group.scale.y / Math.max(0.01, v.height);
+      v.group.position.copy(_relicLeft).add(_relicRight).multiplyScalar(0.5);
+      v.group.position.y -= 0.5 * v.height * scale;
+      v.group.scale.setScalar(scale);
+      v.group.rotation.y = carrier.heading;
+    } else if (carry && !carry.e.shown) v.group.visible = false;
     if (v.unit) {
       v.group.updateMatrix();
       // an animal falls at its death (deathOf); a carcass model lies dead from the start
@@ -2625,6 +2645,10 @@ function healsOf(e) {
   }
   return (e.heal = { T0: Float64Array.from(T0), T1: Float64Array.from(T1) });
 }
+/** Shared conversion windows already used by the map rings, indexed on the 3D entity. */
+function conversionsOf(e) {
+  return e.convertSpans ??= M2.conversions.filter((cv) => cv.caster.id === e.id);
+}
 /**
  * Gait blend position at ground speed v for gaits G drawn at entry scale es: k = gait k, a fraction blends k and k + 1
  * within ±4% of a boundary. Boundaries sit at the geometric mean of neighbouring natural speeds, but at least 25% off
@@ -2800,14 +2824,19 @@ function unitAnim(e, v, t, c, i, es) {
     if (h && !h.rider) act += w;
   }
   if (b && !b.torch && e.job) tool = JOBS[J_WOOD].tool; // villagers fight with the axe
-  const pre = code > HOLD ? 'tool_' : code > CARRY ? 'carry_' : '';
+  const carryingRelic = !!relicCarryAt(e, t);
+  const pre = carryingRelic ? 'carry_' : code > HOLD ? 'tool_' : code > CARRY ? 'carry_' : '';
   const G = gaitsOf(v, T, pre, seed), mv = G.length ? sstep(vs, 0.2, 0.8) : 0;
   // pauses off a fight: a monk's heal loops through the heals it gives (easing in and out), a villager's dropoff plays
   // from the end of its load walk and anyone's stop clip from an arrival, each only as far as the unit stands still
   if (!b) {
     let h = null, w = 0, x = 0;
+    const conversion = T.convert.length ? conversionsOf(e).find((cv) => t >= cv.t && t < cv.end) : null;
     const H = T.heal.length ? healsOf(e) : null, hk = H ? idxAt(H.T0, t + 0.3) : -1;
-    if (hk >= 0 && t < H.T1[hk] + 0.4) {
+    if (conversion) {
+      h = oneOf(T.convert, seed); x = loopT(h, t - conversion.t);
+      w = win(t, conversion.t, conversion.end);
+    } else if (!carryingRelic && hk >= 0 && t < H.T1[hk] + 0.4) {
       h = oneOf(T.heal, seed); x = loopT(h, t - H.T0[hk] + seed * h.dur);
       w = sstep(t, H.T0[hk] - 0.3, H.T0[hk]) * (1 - sstep(t, H.T1[hk], H.T1[hk] + 0.4));
     } else if (e.job && !(code && code < CARRY)) {
@@ -2815,7 +2844,7 @@ function unitAnim(e, v, t, c, i, es) {
       h = t - d0 < 3 ? oneOf(clipTable(e.bp, style ?? JOB_KEY[D.J[dk]]).dropoff, seed) : null; // the load's job set
       if (h) { x = holdT(h, t - d0); w = win(t, d0, d0 + h.dur); }
     }
-    if (!h && !code && T.stop.length) {
+    if (!h && !code && !carryingRelic && T.stop.length) {
       const S = stopsOf(e), sk = idxAt(S, t + STOP_LEAD);
       if (sk >= 0 && t - S[sk] < 3) { h = oneOf(T.stop, seed); const s0 = S[sk] - STOP_LEAD; x = holdT(h, t - s0); w = win(t, s0, s0 + h.dur); }
     }
@@ -4029,15 +4058,59 @@ const _camQ = new THREE.Quaternion(), _camF = new THREE.Vector3(), _camU = new T
 const _camM = new THREE.Matrix4();
 const MOVE_KEYS = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE'];
 const director = RV.director(M2); // Follow action: where a caster would look at each moment (shared director.js)
+let shotScene = null, shotZooming = false;
 
 /** Follow action on or off (button, G). It owns the camera: a player's recorded camera and a unit follow end. */
 function setFollowAction(on) {
   state.followAction = on;
+  shotScene = null; // the first shot may cut straight to the action
   if (on) {
     setCamPlayer(0);
     if (state.follow) { state.follow = false; renderInspector(true); }
   }
   syncPov();
+}
+
+/**
+ * Follow action: fit shot s's points to the screen with RV.SHOT_FRAMING's margin, dead zone and zoom rates (the 2D
+ * map's chase), keeping the user's orbit angle; a new scene more than a screen away is a cut. Wall-clock rates.
+ */
+function chaseShot(s, dt) {
+  const F = RV.SHOT_FRAMING;
+  _off.subVectors(camera.position, controls.target);
+  const D = _off.length();
+  let fx = -_off.x, fz = _off.z; // the screen's forward on the ground, in game coordinates (scene z = −game z)
+  const fl = Math.hypot(fx, fz);
+  if (fl < 1e-6) { fx = 0; fz = 1; } else { fx /= fl; fz /= fl; }
+  const sinP = Math.max(0.2, _off.y / D); // ground depth shows on screen foreshortened by the pitch
+  const tv = Math.tan(camera.fov * Math.PI / 360), th = tv * camera.aspect;
+  const ext = RV.shotExtent(s, -fz, fx, fx, fz), fit = 1 - 2 * F.margin;
+  const want = ext ? clamp(Math.max(ext[0] / th, ext[1] * sinP / tv) / fit, 60, 600) : D;
+  const half = D * Math.min(th, tv / sinP); // metres from the centre to the nearer screen edge, on the ground
+  const dx = s.x - controls.target.x, dz = -s.z - controls.target.z, d = Math.hypot(dx, dz);
+  if (s.scene !== shotScene) {
+    shotScene = s.scene;
+    if (d > 2 * half) {
+      controls.target.set(s.x, terrain.heightAt(s.x, s.z), -s.z);
+      camera.position.copy(controls.target).addScaledVector(_off, want / D);
+      shotZooming = false;
+      return;
+    }
+  }
+  const dead = F.dead * half;
+  if (d > dead && d - dead > 0.05) {
+    const k = (1 - Math.exp(-dt * F.pan)) * (d - dead) / d;
+    _v.set(dx * k, (terrain.heightAt(s.x, s.z) - controls.target.y) * k, dz * k);
+    controls.target.add(_v);
+    camera.position.add(_v);
+  }
+  const ds = Math.log(want / D); // > 0: back away
+  if (Math.abs(ds) > F.zoomBand) shotZooming = true;
+  if (shotZooming && Math.abs(ds) < 0.005) shotZooming = false;
+  if (shotZooming) {
+    const k = 1 - Math.exp(-dt * (ds > 0 ? F.zoomOut : F.zoomIn));
+    camera.position.copy(controls.target).addScaledVector(_off, Math.exp(ds * k));
+  }
 }
 
 /** Drive the view from player idx's recorded camera (R.cameraAt), or hand it back to the free camera (0). */
@@ -4094,16 +4167,7 @@ function updateCamera(dt) {
   if (state.followAction && state.follow && state.selected) state.followAction = false; // a unit follow (F, double-click) takes over
   if (state.followAction) {
     const s = director.shot(state.t);
-    if (s) {
-      const k = 1 - Math.exp(-dt * 2.5); // wall-clock rate: the same pan at every playback speed
-      _v.set(s.x, terrain.heightAt(s.x, s.z), -s.z).sub(controls.target);
-      _off.subVectors(camera.position, controls.target);
-      const zoom = Math.log(clamp(s.r * 6, 70, 500) / _off.length()); // focusFight's framing of a fight's radius
-      if (_v.lengthSq() > 0.0025 || Math.abs(zoom) > 1e-3) {
-        controls.target.addScaledVector(_v, k);
-        camera.position.copy(controls.target).addScaledVector(_off, Math.exp(zoom * k));
-      }
-    }
+    if (s) chaseShot(s, dt);
   }
   const e = state.selected;
   if (state.follow && e) {
@@ -4179,6 +4243,7 @@ function iconSrc(e, px) {
 
 function seek(t) {
   state.t = clamp(t, R.t0, R.t1);
+  replayAudio.reset();
   director.cut(); // Follow action picks the hottest fight at the new time instead of holding the old one
   reanchor();
   raidToasts.clear();
@@ -4219,6 +4284,7 @@ function afterSelection(follow = false) {
   invalidate();
   selVer++;
   state.selected = selection.size === 1 ? selection.values().next().value : null;
+  replayAudio.select(state.selected);
   state.follow = !!(follow && state.selected);
   renderInspector(true);
 }
@@ -5433,6 +5499,7 @@ function frame(now) {
   // Toast expiry/fades, sacred-site blinking and kill-feed highlights use DOM timers/CSS:
   // they continue independently of WebGL. Wind, water, FX and poses use replay time.
   updateCamera(dt);
+  replayAudio.update();
   const fogPending = state.vision && (!Number.isFinite(fog.t) || Math.abs(t - fog.t) >= FOG_EVERY);
   if (!state.playing && !dirty && !fogPending) return;
   const wasDirty = dirty;
@@ -5503,4 +5570,4 @@ if (moments && LINK.moment != null) moments.show(LINK.moment - 1);
 requestAnimationFrame(frame);
 
 // debug/automation handle (console: viewer.seek(300), viewer.select(viewer.R.byId.get(id)))
-window.viewer = { R, M2, VIEW, marks, combatFx, moments, state, seek, select, selection, setSelection, selectIds, setPlaying, setSpeed, focusOn, camera, controls, assets, renderer, composer, aoPass, fog, fogPass, scene, sun, terrain, grass, units, gaia, fillers, JOBS, victory, raidToasts };
+window.viewer = { R, M2, VIEW, replayAudio, marks, combatFx, moments, state, seek, select, selection, setSelection, selectIds, setPlaying, setSpeed, focusOn, camera, controls, assets, renderer, composer, aoPass, fog, fogPass, scene, sun, terrain, grass, units, gaia, fillers, JOBS, victory, raidToasts };

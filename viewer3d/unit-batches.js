@@ -560,6 +560,27 @@ export class UnitBatches {
     d[20] = ra; d[21] = s.b ? this.row(s.b, s.tb) : ra; d[22] = s.b ? s.w : 0; d[23] = s.props & 0xffffff;
   }
 
+  /** Socket origin in parent coordinates, sampled from the same frames and blend as GPU skinning.
+   * Foot units only: rider re-seating needs the shader's extra transform and is deliberately unsupported here.
+   */
+  socketPosition(view, bone, out) {
+    const r = this.recs.get(view);
+    if (!r || r.stamp !== this.frame || r.data[19]) return false;
+    const f = r.model.fam, b = f.index.get(bone.toLowerCase());
+    if (b === undefined) return false;
+    const d = r.data, half = THREE.DataUtils.fromHalfFloat;
+    const coord = (row, axis) => {
+      const lo = Math.floor(row), hi = Math.min(lo + 1, f.rows - 1), a = row - lo;
+      const offset = b * 12 + axis * 4 + 3;
+      return half(f.data[lo * f.width * 4 + offset]) * (1 - a) + half(f.data[hi * f.width * 4 + offset]) * a;
+    };
+    const x = coord(d[20], 0) * (1 - d[22]) + coord(d[21], 0) * d[22];
+    const y = coord(d[20], 1) * (1 - d[22]) + coord(d[21], 1) * d[22];
+    const z = coord(d[20], 2) * (1 - d[22]) + coord(d[21], 2) * d[22];
+    out.set(d[0] * x + d[1] * y + d[2] * z + d[3], d[4] * x + d[5] * y + d[6] * z + d[7], d[8] * x + d[9] * y + d[10] * z + d[11]);
+    return true;
+  }
+
   /** Instance texture with room for at least n instances (contents are rewritten every update). */
   growInstances(n) {
     let cap = Math.max(PER_ROW, this.instCap);

@@ -51,9 +51,9 @@ const tableFor = (key) => {
 const tables = new Map(), mixed = [], R3 = { combat: { heals: [] } }; // R3: the viewer's R (only its heals are read)
 const anim = vm.runInNewContext(
   ['XF', 'BLOW_LEAD', 'BLOW_HOLD', 'JOB_KEY', 'GAITS', 'GAIT_U', 'STOP_LEAD', 'oneOf', 'nthOf', 'loopT', 'holdT', 'win', 'gaitAdd'].map(constSrc).join('\n')
-  + ['gaitsOf', 'odoOf', 'unitOdo', 'cruiseOf', 'stopsOf', 'dropsOf', 'healsOf', 'gaitPos', 'unitAnim'].map(fnSrc).join('') + '\nunitAnim;',
+  + ['gaitsOf', 'odoOf', 'unitOdo', 'cruiseOf', 'stopsOf', 'dropsOf', 'healsOf', 'conversionsOf', 'gaitPos', 'unitAnim'].map(fnSrc).join('') + '\nunitAnim;',
   {
-    ...core, R: R3, ANIMS: { blueprints: {} }, sstep: THREE.MathUtils.smoothstep,
+    ...core, R: R3, M2: { conversions: [] }, ANIMS: { blueprints: {} }, sstep: THREE.MathUtils.smoothstep,
     clipTable: (bp, key) => tables.get(key) ?? (tables.set(key, tableFor(key)), tables.get(key)),
     propsOf: () => ({ gear: 0, main: 0, torch: 0, tools: new Map() }), propOf: () => 0, fireClip: () => null,
     mixAdd: (h, tt, w) => (h && w > 1e-3 ? (mixed.push({ id: h.id, state: h.state, w }), w) : 0), mixOut: () => mixed.splice(0),
@@ -109,4 +109,28 @@ test('a healer loops its heal clip through its heals, not after them nor while i
     assert.equal(weight(pose(e, 5), 'heal'), 0);
     assert.equal(weight(pose(e, 2.5, { eng: 1, ref: { b: { on: true }, mobile: true } }), 'heal'), 0);
   } finally { R3.combat.heals = []; }
+});
+
+test('a recorded conversion selects the channel clip and releases it after the window', () => {
+  const e = walker(new Array(18).fill(0)), T = tableFor('convert-test');
+  tables.set(null, T); T.convert = [clip('convert', 'monk', 2)];
+  e.convertSpans = [{ t: 2, end: 5 }];
+  try {
+    assert.ok(weight(pose(e, 3), 'convert') > 0.9);
+    assert.equal(weight(pose(e, 6), 'convert'), 0);
+    assert.ok(weight(pose(e, 3), 'convert') > 0.9);
+  } finally { tables.delete(null); }
+});
+
+test('confirmed relic carrying chooses the existing carry gait and idle pose', () => {
+  const e = walker([0, 1, 2, 3, 3, 3, 3, 3, 3]), T = tableFor('relic-test');
+  e.spans = [0, 10];
+  const g = { spans: [0, 10] }; e.relicCarries = [{ e, g, start: 0, end: 4 }];
+  T.carry_idle = [clip('carry_idle', 'monk', 2)]; T.carry_walk = [clip('carry_walk', 'monk', 1, { move: 1.6 })];
+  tables.set(null, T);
+  try {
+    assert.ok(weight(pose(e, 1), 'carry_walk') > 0.9);
+    assert.ok(weight(pose(e, 3), 'carry_idle') > 0.9);
+    assert.equal(weight(pose(e, 4), 'carry_idle'), 0);
+  } finally { tables.delete(null); }
 });

@@ -241,15 +241,30 @@
     // The zoom that keeps a disc of `radius` around the view centre on screen, with a margin.
     scaleFor(radius) { return Math.min(this.w, this.h) / (2 * Math.max(20, radius) * 1.6); }
 
-    // Follow the action (director.js): ease toward shot s's centre and the zoom focus() picks for its radius, at a
-    // wall-clock rate so the camera pans the same at every playback speed. true while it is still moving.
+    // Follow the action (director.js): fit the shot's points to the canvas with RV.SHOT_FRAMING's margin, dead zone and
+    // zoom rates, at a wall-clock rate so the camera moves the same at every playback speed; a new scene more than a
+    // screen away is a cut. true while the camera moves.
     chase(s, dt) {
       if (!s) return false;
-      const dx = s.x - this.camX, dz = s.z - this.camZ, ds = Math.log(this.scaleFor(s.r) / this.scale);
-      if (Math.hypot(dx, dz) * this.scale < 0.5 && Math.abs(ds) < 0.002) return false;
-      const k = 1 - Math.exp(-dt * 2.5);
-      this.camX += dx * k; this.camZ += dz * k; this.scale *= Math.exp(ds * k);
-      return true;
+      const F = RV.SHOT_FRAMING, ext = RV.shotExtent(s, this.tc, -this.ts, this.ts, this.tc), fit = 1 - 2 * F.margin;
+      const want = ext ? Math.min(60, Math.max(0.3, Math.min(this.w * fit / (2 * ext[0]), this.h * fit / (2 * ext[1])))) : this.scale;
+      const half = Math.min(this.w, this.h) / 2 / this.scale; // metres from the centre to the nearer edge
+      const dx = s.x - this.camX, dz = s.z - this.camZ, d = Math.hypot(dx, dz);
+      if (s.scene !== this.shotScene) {
+        this.shotScene = s.scene;
+        if (d > 2 * half) { this.camX = s.x; this.camZ = s.z; this.scale = want; this.zooming = false; return true; }
+      }
+      let moved = false;
+      const dead = F.dead * half;
+      if (d > dead && (d - dead) * this.scale > 0.5) {
+        const k = (1 - Math.exp(-dt * F.pan)) * (d - dead) / d;
+        this.camX += dx * k; this.camZ += dz * k; moved = true;
+      }
+      const ds = Math.log(want / this.scale);
+      if (Math.abs(ds) > F.zoomBand) this.zooming = true;
+      if (this.zooming && Math.abs(ds) < 0.005) this.zooming = false;
+      if (this.zooming) { this.scale *= Math.exp(ds * (1 - Math.exp(-dt * (ds < 0 ? F.zoomOut : F.zoomIn)))); moved = true; }
+      return moved;
     }
 
     // World (x, z) -> screen: the offset from the camera turned, z up.

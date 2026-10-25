@@ -866,6 +866,13 @@ class Handler(BaseHTTPRequestHandler):
             f = (VIEWER / urllib.parse.unquote(path[len("/viewer/"):])).resolve()
             if f.is_file() and f.is_relative_to(VIEWER.resolve()):
                 return self.send(200, f.read_bytes(), TYPES.get(f.suffix, "application/octet-stream"))
+        # Shared audio engine in the 2D viewer uses the same derived replay model and local sound pack.
+        for prefix, folder in (("/viewer3d/core/", ROOT / "viewer3d/core"),
+                               ("/viewer3d/assets/audio/", ROOT / "viewer3d/assets/audio")):
+            if path.startswith(prefix):
+                f = (folder / urllib.parse.unquote(path[len(prefix):])).resolve()
+                if f.is_file() and f.is_relative_to(folder.resolve()) and f.suffix in (".js", ".json", ".ogg"):
+                    return self.send(200, f.read_bytes(), "audio/ogg" if f.suffix == ".ogg" else TYPES.get(f.suffix, "application/octet-stream"))
         self.send(404, b"not found")
 
     def do_POST(self) -> None:

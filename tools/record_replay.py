@@ -3,10 +3,12 @@
 Usage:
     python tools/record_replay.py [path/to/replay.rec] [--speed N] [--keep-open]
     python tools/record_replay.py <folder or several .rec files> [--speed N]
+    python tools/record_replay.py path/to/replay.rec --probe recorder/probes/census.lua [--probe ...]
 
-A folder (searched recursively) or several files record every replay that has no complete recording yet, one after
-another, closing the game in between. Replays from another game build are skipped, a failed replay is retried on the
-next run, and three failures in a row stop the run. Running the same command again continues where it stopped.
+A folder (searched recursively) or several files record every replay that has no complete recording from the current
+recorder version yet (an older recorder's .rlog is recorded again), one after another, closing the game in between.
+Replays from another game build are skipped, a failed replay is retried on the next run, and three failures in a row
+stop the run. Running the same command again continues where it stopped.
 
 Steps: copy the replay into the game's playback folder, launch it through Steam with
 `-dev -replay playback:<name>`, open the SCAR console, load recorder/recorder.lua (one loadfile line;
@@ -19,6 +21,10 @@ requested rate is higher. The default asks for more than any frame rate delivers
 Recordings at 8x, 16x and uncapped give the same unit positions. To render faster the game is launched at
 RECORDING_GRAPHICS (lowest settings, 720p, vsync off; same records); the player's configuration is restored once the
 game has closed. --keep-open leaves the game up to watch, so it keeps the player's settings.
+
+--probe loads extra SCAR scripts after the recorder, for investigating what the game exposes during playback. Their
+"R|" records share the recorder's timeline; the run is written to recordings/probes/<name>.<probe>.rlog, outside
+the recordings the batch, the viewers and convert.py --all read, and is not converted.
 
 All console input is posted to the game window in the background; the script never
 focuses the game. Launching the game brings it up once; switch away whenever you like.
@@ -83,6 +89,7 @@ def find_game_dir() -> Path | None:
 
 
 RECORDER = ROOT / "recorder" / "recorder.lua"
+PROBE_DIR = ROOT / "recordings" / "probes"
 CHUNK = 350
 SIM_TICKS_PER_SECOND = 8
 # Complete recordings can finish 1.0 s before the replay duration; allow one extra simulation tick of headroom.
@@ -414,14 +421,17 @@ class CaptureHealth:
         self.last_t = None
         self.errors = 0
         self.gaps = 0
-        self.header = False
+        self.version = None
 
     def add(self, line: str) -> None:
         record = line.strip()
         if not record.startswith(("HDR|", "ERR|", "T|")):
             record = record.split("R|", 1)[-1]
         if record.startswith("HDR|"):
-            self.header = True
+            try:
+                self.version = int(record.split("|")[1])
+            except ValueError:
+                self.errors += 1
         elif record.startswith("ERR|"):
             self.errors += 1
         elif record.startswith("T|"):
@@ -436,12 +446,13 @@ class CaptureHealth:
             self.last_t = t
 
     def complete(self, duration: float) -> bool:
-        return (self.header and self.last_t is not None and not self.errors and not self.gaps
+        return (self.version == grammar.VERSION and self.last_t is not None and not self.errors and not self.gaps
                 and reached_end(self.last_t, duration))
 
 
 def is_complete(rlog: Path, duration: float) -> bool:
-    """Stream the recording: require a header, end coverage, no ERR, and no >2-interval gaps."""
+    """Stream the recording: require a header from the current recorder version, end coverage, no ERR, and no
+    >2-interval gaps. A recording made by an older recorder counts as missing, so a batch run records it again."""
     health = CaptureHealth()
     try:
         with rlog.open(encoding="utf-8", errors="replace") as stream:
@@ -452,10 +463,12 @@ def is_complete(rlog: Path, duration: float) -> bool:
     return health.complete(duration)
 
 
-def record(src: Path, rec: recfile.Replay, speed: float, keep_open: bool) -> tuple[Path, bool]:
-    """Play one replay in the game and write recordings/<name>.rlog. Returns the .rlog and whether playback reached
-    the end (False: it stopped advancing, the recording is cut short). Unless keep_open, the game is closed
-    afterwards, also when recording fails."""
+def record(src: Path, rec: recfile.Replay, speed: float, keep_open: bool,
+           probes: tuple[Path, ...] = ()) -> tuple[Path, bool]:
+    """Play one replay in the game and write recordings/<name>.rlog, or with probes loaded after the recorder
+    recordings/probes/<name>.<probe>....rlog. Returns the .rlog and whether playback reached the end (False: it
+    stopped advancing, the recording is cut short). Unless keep_open, the game is closed afterwards, also when
+    recording fails."""
     duration = rec.duration_seconds
     print(f"Replay: {src.name}  build {rec.version}  {clock(duration)}  "
           + ", ".join(f"{p.name} ({p.civ})" for p in rec.players))
@@ -504,6 +517,12 @@ def record(src: Path, rec: recfile.Replay, speed: float, keep_open: bool) -> tup
         status = [l for l in log.lines if re.search(r"R\|(READY|ALREADY|ERR\|install)", l)]
         if not status or not re.search(rf"R\|READY\|[\d.]+\|{nonce}(?:\s|$)", status[-1]):
             raise RecordError(f"recorder failed session handshake: {status[-1] if status else 'no status line'}")
+        for probe in probes:
+            print(f"Loading probe {probe.name}...")
+            try:
+                console.load(probe.read_text(encoding="utf-8"), f"aoe4_probe_{probe.stem}.lua")
+            except ConsoleError as e:
+                raise RecordError(f"probe {probe.name} failed to load: {e}") from None
         rate = SIM_TICKS_PER_SECOND * speed
         console.set_sim_rate(rate)
         print(f"Recording at sim rate {rate:g} ({speed:g}x requested)...")
@@ -536,9 +555,9 @@ def record(src: Path, rec: recfile.Replay, speed: float, keep_open: bool) -> tup
             time.sleep(2)
         print()
 
-        out_dir = ROOT / "recordings"
-        out_dir.mkdir(exist_ok=True)
-        out = out_dir / (src.stem + ".rlog")
+        out_dir = PROBE_DIR if probes else ROOT / "recordings"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out = out_dir / (src.stem + "".join(f".{p.stem}" for p in probes) + ".rlog")
         skip = ("ACK", "NAK", "SUM")
         records = [l.split("R|", 1)[1] for l in log.lines if "R|" in l]
         records = [r for r in records if r.split("|", 1)[0] not in skip]
@@ -662,6 +681,9 @@ def record_main() -> None:
                     help="requested playback speed (sim rate = 8 x speed); the default is effectively uncapped")
     ap.add_argument("--keep-open", action="store_true", help="leave the game running afterwards (single replay)")
     ap.add_argument("--game-dir", type=Path, help="the game's install folder (default: found through Steam)")
+    ap.add_argument("--probe", type=Path, action="append", default=[],
+                    help="extra SCAR script loaded after the recorder (repeatable, single replay); the run goes to "
+                         "recordings/probes/ and is not converted")
     args = ap.parse_args()
 
     game_dir = args.game_dir or find_game_dir()
@@ -670,8 +692,8 @@ def record_main() -> None:
                          + "; pass the game's folder with --game-dir")
     paths = args.replays or [PLAYBACK_DIR / "temp.rec"]
     if len(paths) > 1 or paths[0].is_dir():
-        if args.keep_open:
-            ap.error("--keep-open works with a single replay only")
+        if args.keep_open or args.probe:
+            ap.error("--keep-open and --probe work with a single replay only")
         record_many(paths, args.speed, game_dir)
         return
 
@@ -681,9 +703,14 @@ def record_main() -> None:
     if build is not None and build != rec.version:
         raise SystemExit(f"replay was recorded on build {rec.version}, installed game is build {build}; it will not play")
     try:
-        rlog, complete = record(src, rec, args.speed, args.keep_open)
+        rlog, complete = record(src, rec, args.speed, args.keep_open, tuple(args.probe))
     except RecordError as e:
         raise SystemExit(str(e)) from None
+    if args.probe:
+        print(f"Probe run {'complete' if complete else 'INCOMPLETE'}: {rlog}")
+        if not complete:
+            raise SystemExit(1)
+        return
     if not complete:
         raise SystemExit(f"Recording is incomplete (stopped before the replay's end); kept {rlog} but not converted")
     data = convert.convert(rlog, src)

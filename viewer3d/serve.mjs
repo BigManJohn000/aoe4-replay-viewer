@@ -34,6 +34,7 @@ const TYPES = {
   ".glb": "model/gltf-binary",
   ".gltf": "model/gltf+json",
   ".bin": "application/octet-stream",
+  ".ogg": "audio/ogg",
   ".ktx2": "image/ktx2",
   ".wasm": "application/wasm",
   ".png": "image/png",
