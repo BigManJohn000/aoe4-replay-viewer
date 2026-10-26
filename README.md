@@ -72,28 +72,27 @@ Python 3.12 embeddable package with `psutil`).
 The replay must come from the game version you have installed; matches from another version are flagged rather than
 recorded. Old matches may no longer be on the server.
 
-The list is kept in `recorder_app.json`, so closing the window and starting again continues where it stopped.
+The list is kept in `recorder_app.json` (local to your PC, never committed), so closing the window and starting again
+continues where it stopped.
 **Watch in game**, in both viewers, opens AoE4 on the same replay and fast-forwards to the moment you are looking at.
 
 ### From the command line
 
 ```
-python\python.exe tools\record_replay.py path\to\replay.rec   # record one replay (or a folder of them)
+python\python.exe tools\record_replay.py path\to\replay.rec   # record one replay
 python\python.exe tools\record_replay.py                      # your last match (the game's playback\temp.rec)
 python\python.exe tools\convert.py recordings\<name>.rlog <replay.rec>   # re-convert a recording
 python\python.exe tools\convert.py --all                      # all recordings with a matching .rec; publish catalogs once
 python\python.exe tools\trends.py                             # rebuild viewer/data/trends/games.js
 ```
 
-`Record replays.bat` records everything under `replays/` that has no complete recording yet. Complete means the
-recording has a header from the current recorder version (an older recorder's recording is recorded again), its last
-sample is within 1.125 s of the replay's end, no recorder errors, and no heartbeat
-gap longer than twice the 0.5 s sampling interval. Incomplete captures are kept but not converted and retried next
-run. GUI **Done** and batch skipping additionally require a valid JSON viewer payload, not merely an existing file.
-The `.rlog`, viewer payload, index and recorder state/summary outputs are published by same-directory temporary
-write, flush/fsync and atomic replacement. Batch recording reconverts a valid complete rlog with a missing or damaged
-payload without replaying the game. Batch conversion refreshes the index and trends once; `convert.py --all` finds `.rec`
-files recursively under `replays/`, then the game's playback folder, and reports recordings without a matching replay.
+A recording is complete when it has a recorder header, its last sample is within 1.125 s of the replay's end, it has
+no recorder errors, and no heartbeat gap is longer than twice the 0.5 s sampling interval. An incomplete capture is
+kept but not converted. The Recorder's **Done** additionally requires a valid JSON viewer payload, not merely an
+existing file. The `.rlog`, viewer payload, index and recorder state/summary outputs are published by same-directory
+temporary write, flush/fsync and atomic replacement. `convert.py --all` finds `.rec` files recursively under
+`replays/`, then the game's playback folder, converts every recording that has one, refreshes the index and trends
+once, and reports recordings without a matching replay.
 
 Controllers exclusively lock recording before staging or launching. Shutdown kills only the launched/explicitly
 attached PID after checking its process creation time; an unknown or reused PID is left untouched. The console's
@@ -212,14 +211,13 @@ The **Graphics** setting in the 3D viewer switches between High and Low (fast) q
 
 | Path | What it holds |
 | --- | --- |
-| `Replay Recorder.bat`, `Record replays.bat` | Double-click launchers (run `python\python.exe`) |
+| `Replay Recorder.bat` | Double-click launcher (runs `python\python.exe`) |
 | `recorder/recorder.lua` | The in-game recorder script (record format documented in its header) |
 | `tools/recorder_app.py`, `.html` | Replay Recorder: the local page on 127.0.0.1:47811 |
 | `tools/record_replay.py`, `aoe4input.py` | Starts the game on a replay, types into its console in the background, fast-forwards, collects the log |
 | `tools/recfile.py` | `.rec` parser (build, players, map, train/build/research commands, abilities, player cameras, `orders()`: every command with queue flag, receivers and target) |
 | `tools/convert.py`, `rlog.py` | `.rlog` + `.rec` to viewer data: fights, kills, army value, techs, player cameras, conversions |
 | `tools/mechanics.py` | Selection, control-group and hotkey use inferred from order receivers and player cameras |
-| `tools/input_logger.py`, `validate_mechanics.py` | Keyboard and mouse logger (AoE4 window only) and the check of `mechanics.py` against its logs |
 | `tools/trends.py`, `fetch_replays.py`, `check_units.py` | Trends data, replay download, unit-class check after game updates |
 | `viewer/` | 2D viewer (Canvas 2D, no dependencies); `data/` holds the recordings both viewers read |
 | `viewer3d/` | 3D viewer (three.js r186): `serve.mjs` (serves the 3D page and mounts `viewer/` at `/shared/`, so the 3D page loads the 2D `model.js`, `map.js`, `data/`, `notes/` and `trends.html`; `/shared/notes.json` lists the notes), `viewer.js`, `marks.js` (ground marks: orders, trails, alerts, sacred sites, conversions, cameras), `panels.js` (map key, army on screen, unit names, moments), `hud.js` (victory timers, under-attack notices), `core/` (shared replay model), `tools/` (model build, `build-stats.mjs`, `parity-check.mjs`) |
@@ -366,40 +364,8 @@ median 100 % (5th percentile 94 %) of build placements, which must be clicked on
 (`placed_in_view`). Across the 25 players with at least 5 of those games, minimap orders, jumps per minute and jumps
 onto units mostly tell players apart (intraclass correlation 0.65-0.76); production off screen does not (0.10): every
 player there sits around half. `mechanics.Game(rec, rlog).players` exposes the per-event data behind the summary
-(selections, jumps, minimap targets, placements). None of it is checked against logged keystrokes yet; the next two
-tools do that.
-
-#### Checking the inferences against your own keystrokes
-
-1. Before playing, start `python\python.exe tools\input_logger.py` and leave it running; Ctrl+C stops it.
-   - It records keys and mouse buttons only while `RelicCardinal.exe` is the active window: virtual-key codes with
-     modifier bits, button presses with window coordinates, wheel steps, window size and focus changes. Mouse movement
-     is not recorded.
-   - Chat is kept out on a best-effort basis only: keys between an Enter and the next Enter (or an Esc) are dropped.
-     The logger cannot see the chat box, so an Enter that confirms a menu instead of opening chat puts it out of step,
-     and from then on chat messages are written in full until an Esc resets it. Read a log before sharing it.
-   - It installs low-level Windows hooks and never sends input to the game or reads its memory.
-   - It writes `recordings\input\<start time>.jsonl` (gitignored). Each replay the game saves (`playback\temp.rec`)
-     is copied next to the log as `<start time>_<HHMMSS>.rec` and noted in the log. `--no-replays` turns that off,
-     `--minutes N` stops on a timer and `--summary LOG` prints the key and click counts of a log.
-2. After playing, record each saved replay: `python\python.exe tools\record_replay.py recordings\input\<log>_<time>.rec`.
-3. Run `python\python.exe tools\validate_mechanics.py recordings\input\<log>.jsonl`. `--rec` checks one replay against
-   a whole log, and `--player`, `--idle-key 0xBE` and `--base-key 0x48` override what it learns.
-
-The validator matches the logged right-clicks to the player's orders. That finds the player and the clock offset, a new
-offset after each pause; an offset has to pair clearly more clicks than a wrong one pairs by chance. It then states
-what really happened:
-
-- **Selections:** a left click or box on the order's receivers, projected through the replay camera, is a mouse
-  selection. A control-group recall is a group selection. Otherwise the oldest key or click since the previous order
-  decides: a key means keyboard, a click elsewhere (portrait, HUD button) is unclear and left out of the scores.
-- **Camera jumps:** the newest double-tap, key or click before the jump. A click inside the minimap area counts as a
-  minimap click; that area is learned from the right-clicks that landed far from their in-view target.
-
-It also prints the camera model's median right-click error, with the screen mirrored as a control. Each measure gets
-precision and recall against that truth: *keep* when both are at least 80 %, *fix* at 60 %, *drop* below that, and
-*too few* under 10 events. The idle-villager and town-centre keys are learned as the commonest keys behind flagged
-idle selections and base jumps. If no default fits, pass them with `--idle-key` and `--base-key`.
+(selections, jumps, minimap targets, placements). None of it is checked against real keystrokes, so treat these
+numbers as estimates.
 
 ## Limits
 

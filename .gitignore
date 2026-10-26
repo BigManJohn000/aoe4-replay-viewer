@@ -1,14 +1,14 @@
-# Committed: the code, the README, docs/screenshots, the bundled Python the .bat files run (python/: embeddable
-# CPython 3.12 with psutil) and one showcase match: its replay, aoe4world summary, recording, viewer data and the
-# Replay Recorder's list. Everything else stays on this PC: other matches, the 3D models extracted from the game
-# (viewer3d/assets, built locally by viewer3d/tools/build-assets.mjs), the extraction toolchain, logs and settings.
+# Committed: the code, the README, docs/screenshots, the bundled Python the .bat file runs (python/: embeddable
+# CPython 3.12 with psutil) and one showcase match: its replay, aoe4world summary, recording and viewer data, with the
+# viewers' match list and trends naming only that match. Everything else stays on this PC: other matches, the Replay
+# Recorder's list (recorder_app.json), the 3D models extracted from the game (viewer3d/assets, built locally by
+# viewer3d/tools/build-assets.mjs), the extraction toolchain, logs and settings.
 /*
 !/.gitignore
 !/.ignore
 !/AGENTS.md
 !/README.md
 !/Replay Recorder.bat
-!/Record replays.bat
 !/recorder/
 !/tools/
 !/viewer/
@@ -18,7 +18,6 @@
 !/python/
 !/replays/
 !/recordings/
-!/recorder_app.json
 
 /reference/*
 !/reference/what-changed/

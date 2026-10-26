@@ -80,7 +80,8 @@ class RecordReplayTests(unittest.TestCase):
                 (current, 'T|1\nT|2.5\n', False),
                 (current, 'T|1\nT|2\n', True),
                 (current, 'T|2\nT|1.5\nT|2\n', False),
-                (older, 'T|1\nT|1.5\nT|2\n', False),
+                (older, 'T|1\nT|1.5\nT|2\n', True),  # an older recorder's capture stays complete: no re-record
+                ('', 'T|1\nT|1.5\nT|2\n', False),
             ]:
                 with self.subTest(header=header, records=records):
                     path.write_text(header + records, encoding='utf-8')

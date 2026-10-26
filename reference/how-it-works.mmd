@@ -1,7 +1,7 @@
 flowchart LR
   subgraph S1["① Get the replay · Replay Recorder app (127.0.0.1:47811)"]
     direction TB
-    a1(["Paste an aoe4world match link<br/><span class='m'>or drop .rec files on Record replays.bat</span>"])
+    a1(["Paste an aoe4world match link"])
     a2["Read the game id and player id from the link"]
     a3{"Already<br/>downloaded?"}
     a4["Download it from the official<br/>Age of Empires server<br/><span class='m'>server busy → wait, retry up to 3×<br/>not shared by the player → error</span>"]

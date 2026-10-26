@@ -2,13 +2,7 @@
 
 Usage:
     python tools/record_replay.py [path/to/replay.rec] [--speed N] [--keep-open]
-    python tools/record_replay.py <folder or several .rec files> [--speed N]
     python tools/record_replay.py path/to/replay.rec --probe recorder/probes/census.lua [--probe ...]
-
-A folder (searched recursively) or several files record every replay that has no complete recording from the current
-recorder version yet (an older recorder's .rlog is recorded again), one after another, closing the game in between.
-Replays from another game build are skipped, a failed replay is retried on the next run, and three failures in a row
-stop the run. Running the same command again continues where it stopped.
 
 Steps: copy the replay into the game's playback folder, launch it through Steam with
 `-dev -replay playback:<name>`, open the SCAR console, load recorder/recorder.lua (one loadfile line;
@@ -24,7 +18,7 @@ game has closed. --keep-open leaves the game up to watch, so it keeps the player
 
 --probe loads extra SCAR scripts after the recorder, for investigating what the game exposes during playback. Their
 "R|" records share the recorder's timeline; the run is written to recordings/probes/<name>.<probe>.rlog, outside
-the recordings the batch, the viewers and convert.py --all read, and is not converted.
+the recordings the viewers and convert.py --all read, and is not converted.
 
 All console input is posted to the game window in the background; the script never
 focuses the game. Launching the game brings it up once; switch away whenever you like.
@@ -375,10 +369,6 @@ def clock(t: float) -> str:
     return f"{int(t // 60)}:{int(t % 60):02d}"
 
 
-def hours(s: float) -> str:
-    return f"{s / 3600:.1f} h" if s >= 3600 else f"{s / 60:.0f} min"
-
-
 def log_clock(line: str) -> float | None:
     """Seconds since midnight from a scarlog line's "HH:MM:SS.mmm" stamp: when the game wrote it. Python reads the log
     in bursts, so its own read time can lag the stamp by tens of game-seconds."""
@@ -421,17 +411,14 @@ class CaptureHealth:
         self.last_t = None
         self.errors = 0
         self.gaps = 0
-        self.version = None
+        self.header = False
 
     def add(self, line: str) -> None:
         record = line.strip()
         if not record.startswith(("HDR|", "ERR|", "T|")):
             record = record.split("R|", 1)[-1]
         if record.startswith("HDR|"):
-            try:
-                self.version = int(record.split("|")[1])
-            except ValueError:
-                self.errors += 1
+            self.header = True
         elif record.startswith("ERR|"):
             self.errors += 1
         elif record.startswith("T|"):
@@ -446,13 +433,12 @@ class CaptureHealth:
             self.last_t = t
 
     def complete(self, duration: float) -> bool:
-        return (self.version == grammar.VERSION and self.last_t is not None and not self.errors and not self.gaps
+        return (self.header and self.last_t is not None and not self.errors and not self.gaps
                 and reached_end(self.last_t, duration))
 
 
 def is_complete(rlog: Path, duration: float) -> bool:
-    """Stream the recording: require a header from the current recorder version, end coverage, no ERR, and no
-    >2-interval gaps. A recording made by an older recorder counts as missing, so a batch run records it again."""
+    """Stream the recording: require a header, end coverage, no ERR, and no >2-interval gaps."""
     health = CaptureHealth()
     try:
         with rlog.open(encoding="utf-8", errors="replace") as stream:
@@ -576,94 +562,6 @@ def record(src: Path, rec: recfile.Replay, speed: float, keep_open: bool,
     return out, health.complete(duration)
 
 
-def record_many(paths: list[Path], speed: float, game_dir: Path) -> None:
-    """Record every replay under paths (folders searched recursively) without a complete recording, one at a time."""
-    files = sorted({f.resolve() for p in paths for f in (p.rglob("*.rec") if p.is_dir() else [p])})
-    build = installed_build(game_dir)
-    todo: list[Path] = []
-    done = other_build = 0
-    skipped: list[str] = []
-    names: dict[str, Path] = {}
-    converted = False
-    for f in files:
-        if f.stem in names:  # the recording is named after the file, so the second one would overwrite the first
-            skipped.append(f"{f}: same name as {names[f.stem]}")
-            continue
-        names[f.stem] = f
-        try:
-            rec = recfile.load(f)
-        except Exception as e:  # not a replay, truncated download, ...
-            skipped.append(f"{f}: {e}")
-            continue
-        if build is not None and rec.version != build:
-            other_build += 1
-            continue
-        rlog = ROOT / "recordings" / (f.stem + ".rlog")
-        if is_complete(rlog, rec.duration_seconds):
-            if not convert.payload_valid(convert.DATA_DIR / (f.stem + ".js")):
-                convert.convert(rlog, f, publish=False)
-                converted = True
-            done += 1
-            continue
-        todo.append(f)
-    print(f"{len(files)} replays: {done} already recorded, {other_build} from another game build "
-          f"(installed: {build}), {len(skipped)} unreadable, {len(todo)} to record")
-    for s in skipped:
-        print("  skipped", s)
-    if not todo:
-        if converted:
-            convert.write_index()
-            print(convert.trends.update())
-        return
-    if ai.game_pid() is not None:
-        raise SystemExit("Age of Empires IV is already running; close it first")
-
-    recorded, failed = 0, []
-    in_a_row = 0
-    t0 = time.time()
-    try:
-        for n, f in enumerate(todo, 1):
-            print(f"\n[{n}/{len(todo)}] ", end="")
-            try:
-                rlog, complete = record(f, recfile.load(f), speed, keep_open=False)
-                if complete:
-                    convert.convert(rlog, f, publish=False)
-                    converted = True
-                else:
-                    print("  recording is incomplete; this replay is retried on the next run")
-            except Exception as e:  # one replay failing must not end the run; the game is already closed
-                print(f"\n  failed: {e}")
-                complete = False
-            if complete:
-                recorded += 1
-                in_a_row = 0
-            else:
-                failed.append(f.name)
-                in_a_row += 1
-                if in_a_row == 3:
-                    print("\nThree replays in a row failed; stopping. "
-                          "Check that Steam is running and logged in and that the game is not updating.")
-                    break
-            left = len(todo) - n
-            if left:
-                print(f"  {left} left, about {hours((time.time() - t0) / n * left)} to go")
-    except KeyboardInterrupt:
-        print("\nStopped. Run the same command again to continue where it left off.")
-        raise SystemExit(130) from None
-    finally:
-        if converted:
-            convert.write_index()
-            print(convert.trends.update())
-    total = time.time() - t0
-    print(f"\nRecorded {recorded} of {len(todo)} in {hours(total)} ({clock(total / n)} per replay)")
-    if failed:
-        print(f"Not finished ({len(failed)}); they are retried on the next run: " + ", ".join(failed))
-    if recorded:
-        print("Open viewer/index.html in a browser and pick a recording.")
-    if failed:
-        raise SystemExit(1)
-
-
 def main() -> None:
     try:
         with runlock.hold("recording"):
@@ -674,30 +572,22 @@ def main() -> None:
 
 def record_main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("replays", nargs="*", type=Path,
-                    help="a replay file (default: the game's playback/temp.rec), or folders / several files to record "
-                         "every replay in them that has no complete recording yet")
+    ap.add_argument("replay", nargs="?", type=Path,
+                    help="the replay file (default: the game's playback/temp.rec, your last match)")
     ap.add_argument("--speed", type=float, default=125.0,
                     help="requested playback speed (sim rate = 8 x speed); the default is effectively uncapped")
-    ap.add_argument("--keep-open", action="store_true", help="leave the game running afterwards (single replay)")
+    ap.add_argument("--keep-open", action="store_true", help="leave the game running afterwards")
     ap.add_argument("--game-dir", type=Path, help="the game's install folder (default: found through Steam)")
     ap.add_argument("--probe", type=Path, action="append", default=[],
-                    help="extra SCAR script loaded after the recorder (repeatable, single replay); the run goes to "
-                         "recordings/probes/ and is not converted")
+                    help="extra SCAR script loaded after the recorder (repeatable); the run goes to recordings/probes/ "
+                         "and is not converted")
     args = ap.parse_args()
 
     game_dir = args.game_dir or find_game_dir()
     if game_dir is None or not (game_dir / ai.GAME_EXE).exists():
         raise SystemExit(f"{ai.GAME_EXE} not found " + (f"in {game_dir}" if game_dir else "in Steam's game folders")
                          + "; pass the game's folder with --game-dir")
-    paths = args.replays or [PLAYBACK_DIR / "temp.rec"]
-    if len(paths) > 1 or paths[0].is_dir():
-        if args.keep_open or args.probe:
-            ap.error("--keep-open and --probe work with a single replay only")
-        record_many(paths, args.speed, game_dir)
-        return
-
-    src = paths[0]
+    src = args.replay or PLAYBACK_DIR / "temp.rec"
     rec = recfile.load(src)
     build = installed_build(game_dir)
     if build is not None and build != rec.version:
