@@ -392,3 +392,6 @@ is not endorsed by or affiliated with Microsoft.
 This repository contains no game files: no models, textures, animations or sounds. The 2D map art is drawn by this
 project. The 3D models are built locally from your own installation and never leave your PC. Match data comes from
 AoE4World and the official Age of Empires stats API.
+
+The project's own code is released under the [MIT License](LICENSE). The bundled Python (`python/LICENSE.txt`) and
+three.js (`viewer3d/vendor/three/LICENSE`) keep their own licenses.
